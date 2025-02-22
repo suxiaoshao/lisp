@@ -1,12 +1,12 @@
 use nom::{
+    IResult, Parser,
     branch::alt,
     bytes::complete::tag,
     character::complete::{multispace0, multispace1, none_of, one_of},
     combinator::{map, not, peek, recognize},
     multi::{many1, separated_list0},
-    number::complete::float,
+    number::complete::double,
     sequence::delimited,
-    IResult, Parser,
 };
 use string::parse_string;
 
@@ -14,7 +14,7 @@ mod string;
 
 #[derive(Debug, PartialEq)]
 pub enum Expression {
-    Number(f32),
+    Number(f64),
     Variable(String),
     List(Vec<Expression>),
     String(String),
@@ -22,7 +22,7 @@ pub enum Expression {
 
 pub fn parse_expression(input: &str) -> IResult<&str, Expression> {
     let (input, data) = alt((
-        map(float, Expression::Number),
+        map(double, Expression::Number),
         map(
             (tag("("), parse_expression_inner, tag(")")),
             |(_, data, _)| Expression::List(data),
