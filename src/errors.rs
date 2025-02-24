@@ -1,6 +1,6 @@
 use rustyline::error::ReadlineError;
 
-use crate::value::Value;
+use crate::{parse::Expression, value::Value};
 
 #[derive(thiserror::Error, Debug)]
 pub enum LispError {
@@ -24,4 +24,8 @@ pub enum LispComputerError {
     },
     #[error("Operation {} mismatch: get {:?}",.operation,.left)]
     TypeMismatch1 { operation: String, left: Value },
+    #[error("Invalid arguments for function {}: {:?}",.0,.1)]
+    InvalidArguments(String, Vec<Expression>),
+    #[error("Variable not found: {}",.0)]
+    NotFoundVariable(String),
 }

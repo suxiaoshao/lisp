@@ -1,11 +1,13 @@
 use crate::{environment::Environment, errors::LispComputerError, parse::Expression, value::Value};
 
 mod addition;
+mod define;
 mod division;
 mod multiplication;
 mod subtraction;
 
 pub use addition::AdditionProcessor;
+pub use define::DefineProcessor;
 pub use division::DivisionProcessor;
 pub use multiplication::MultiplicationProcessor;
 pub use subtraction::SubtractionProcessor;
@@ -21,7 +23,9 @@ pub fn process_expression(
 ) -> Result<Value, LispComputerError> {
     match expression {
         Expression::Number(data) => Ok(Value::Number(*data)),
-        Expression::Variable(value) => Err(LispComputerError::UnboundFunction(value.to_string())),
+        Expression::Variable(value) => env
+            .get_variable(value)
+            .ok_or(LispComputerError::NotFoundVariable(value.to_string())),
         Expression::List(expressions) => process_expression_list(expressions, env),
         Expression::String(string) => Ok(Value::String(string.to_string())),
     }

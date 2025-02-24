@@ -12,7 +12,7 @@ use string::parse_string;
 
 mod string;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Expression {
     Number(f64),
     Variable(String),

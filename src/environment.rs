@@ -1,11 +1,16 @@
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap};
 
-use crate::process::{
-    AdditionProcessor, DivisionProcessor, Function, MultiplicationProcessor, SubtractionProcessor,
+use crate::{
+    process::{
+        AdditionProcessor, DefineProcessor, DivisionProcessor, Function, MultiplicationProcessor,
+        SubtractionProcessor,
+    },
+    value::Value,
 };
 
 pub struct Environment {
     functions: HashMap<String, Box<dyn Function>>,
+    variables: RefCell<HashMap<String, Value>>,
 }
 
 impl Default for Environment {
@@ -27,13 +32,26 @@ impl Default for Environment {
             DivisionProcessor.name().to_string(),
             Box::new(DivisionProcessor),
         );
+        functions.insert(
+            DefineProcessor.name().to_string(),
+            Box::new(DefineProcessor),
+        );
 
-        Self { functions }
+        Self {
+            functions,
+            variables: RefCell::new(HashMap::new()),
+        }
     }
 }
 
 impl Environment {
     pub fn get_function(&self, name: &str) -> Option<&Box<dyn Function>> {
         self.functions.get(name)
+    }
+    pub fn set_variable(&self, name: String, value: Value) {
+        self.variables.borrow_mut().insert(name, value);
+    }
+    pub fn get_variable(&self, name: &str) -> Option<Value> {
+        self.variables.borrow().get(name).cloned()
     }
 }
