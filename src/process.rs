@@ -3,15 +3,16 @@ use crate::{environment::Environment, errors::LispComputerError, parse::Expressi
 mod addition;
 mod define;
 mod division;
+mod lambda;
 mod multiplication;
 mod subtraction;
 
 pub use addition::AdditionProcessor;
 pub use define::DefineProcessor;
 pub use division::DivisionProcessor;
+pub use lambda::LambdaProcessor;
 pub use multiplication::MultiplicationProcessor;
 pub use subtraction::SubtractionProcessor;
-
 pub trait Function {
     fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError>;
     fn name(&self) -> &str;
@@ -31,7 +32,7 @@ pub fn process_expression(
     }
 }
 
-fn process_expression_list(
+pub fn process_expression_list(
     expressions: &[Expression],
     env: &Environment,
 ) -> Result<Value, LispComputerError> {
@@ -48,8 +49,5 @@ fn process_variable(
     args: &[Expression],
     env: &Environment,
 ) -> Result<Value, LispComputerError> {
-    match env.get_function(symbol) {
-        Some(func) => func.process(args, env),
-        None => Err(LispComputerError::UnboundFunction(symbol.to_string())),
-    }
+    env.process_variable(symbol, args)
 }

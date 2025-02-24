@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 mod lamda;
 
+pub use lamda::Lambda;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     String(String),

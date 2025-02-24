@@ -15,7 +15,7 @@ impl Function for DefineProcessor {
                 Ok(crate::value::Value::Nil)
             }
             _ => Err(crate::errors::LispComputerError::InvalidArguments(
-                "define".to_string(),
+                self.name().to_string(),
                 args.to_vec(),
             )),
         }

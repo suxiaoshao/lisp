@@ -28,4 +28,6 @@ pub enum LispComputerError {
     InvalidArguments(String, Vec<Expression>),
     #[error("Variable not found: {}",.0)]
     NotFoundVariable(String),
+    #[error("Arity mismatch: expected {}, got {}",.0,.1)]
+    ArityMismatch(usize, usize),
 }
