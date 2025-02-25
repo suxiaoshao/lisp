@@ -5,7 +5,8 @@ use crate::{
     parse::Expression,
     process::{
         AdditionProcessor, DefineProcessor, DivisionProcessor, EqualProcessor, Function,
-        IfProcessor, LambdaProcessor, MultiplicationProcessor, SubtractionProcessor,
+        GreaterThanOrEqualProcessor, IfProcessor, LambdaProcessor, LessThanOrEqualProcessor,
+        MultiplicationProcessor, SubtractionProcessor,
     },
     value::Value,
 };
@@ -89,7 +90,22 @@ impl Environment {
         );
         functions.insert(EqualProcessor.name().to_string(), Box::new(EqualProcessor));
         functions.insert(IfProcessor.name().to_string(), Box::new(IfProcessor));
-
+        functions.insert(
+            GreaterThanOrEqualProcessor.name().to_string(),
+            Box::new(GreaterThanOrEqualProcessor),
+        );
+        functions.insert(
+            LessThanOrEqualProcessor.name().to_string(),
+            Box::new(LessThanOrEqualProcessor),
+        );
+        functions.insert(
+            LessThanOrEqualProcessor.name().to_string(),
+            Box::new(LessThanOrEqualProcessor),
+        );
+        functions.insert(
+            GreaterThanOrEqualProcessor.name().to_string(),
+            Box::new(GreaterThanOrEqualProcessor),
+        );
         functions
     }
 }

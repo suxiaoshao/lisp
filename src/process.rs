@@ -192,22 +192,188 @@ impl Function for EqualProcessor {
         args: &[crate::parse::Expression],
         env: &crate::environment::Environment,
     ) -> Result<crate::value::Value, crate::errors::LispComputerError> {
-        match args {
-            [a, b] => {
-                let a = a.eval(env)?;
-                let b = b.eval(env)?;
-                Ok(crate::value::Value::Boolean(a == b))
-            }
-            args => Err(crate::errors::LispComputerError::ArityMismatch(
+        if args.len() < 2 {
+            return Err(crate::errors::LispComputerError::ArityMismatch(
                 self.name().to_string(),
                 2,
                 args.len(),
-            )),
+            ));
         }
+
+        let mut evaluated_args = Vec::new();
+        for arg in args {
+            evaluated_args.push(arg.eval(env)?);
+        }
+
+        for pair in evaluated_args.windows(2) {
+            if pair[0] != pair[1] {
+                return Ok(crate::value::Value::Boolean(false));
+            }
+        }
+
+        Ok(crate::value::Value::Boolean(true))
+    }
+    fn name(&self) -> &str {
+        "="
+    }
+}
+
+pub struct GreaterThanOrEqualProcessor;
+impl Function for GreaterThanOrEqualProcessor {
+    fn process(
+        &self,
+        args: &[crate::parse::Expression],
+        env: &crate::environment::Environment,
+    ) -> Result<crate::value::Value, crate::errors::LispComputerError> {
+        if args.len() < 2 {
+            return Err(crate::errors::LispComputerError::ArityMismatch(
+                self.name().to_string(),
+                2,
+                args.len(),
+            ));
+        }
+
+        let mut evaluated_args = Vec::new();
+        for arg in args {
+            match arg.eval(env)? {
+                crate::value::Value::Number(n) => evaluated_args.push(n),
+                other => {
+                    return Err(crate::errors::LispComputerError::TypeMismatch1 {
+                        operation: self.name().to_string(),
+                        left: other,
+                    });
+                }
+            }
+        }
+
+        for pair in evaluated_args.windows(2) {
+            if pair[0] <= pair[1] {
+                return Ok(crate::value::Value::Boolean(false));
+            }
+        }
+
+        Ok(crate::value::Value::Boolean(true))
     }
 
     fn name(&self) -> &str {
-        "="
+        ">"
+    }
+}
+
+pub struct LessThanOrEqualProcessor;
+
+impl Function for LessThanOrEqualProcessor {
+    fn process(
+        &self,
+        args: &[crate::parse::Expression],
+        env: &crate::environment::Environment,
+    ) -> Result<crate::value::Value, crate::errors::LispComputerError> {
+        if args.len() < 2 {
+            return Err(crate::errors::LispComputerError::InvalidArguments(
+                self.name().to_string(),
+                args.to_vec(),
+            ));
+        }
+
+        let mut evaluated_args = Vec::new();
+        for arg in args {
+            match arg.eval(env)? {
+                crate::value::Value::Number(n) => evaluated_args.push(n),
+                other => {
+                    return Err(crate::errors::LispComputerError::TypeMismatch1 {
+                        operation: self.name().to_string(),
+                        left: other,
+                    });
+                }
+            }
+        }
+
+        for pair in evaluated_args.windows(2) {
+            if pair[0] <= pair[1] {
+                return Ok(crate::value::Value::Boolean(false));
+            }
+        }
+
+        Ok(crate::value::Value::Boolean(true))
+    }
+
+    fn name(&self) -> &str {
+        "<"
+    }
+}
+
+pub struct GreaterEqualProcessor;
+
+impl Function for GreaterEqualProcessor {
+    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
+        if args.len() < 2 {
+            return Err(crate::errors::LispComputerError::InvalidArguments(
+                self.name().to_string(),
+                args.to_vec(),
+            ));
+        }
+        let mut evaluated_args = Vec::new();
+
+        for arg in args {
+            match arg.eval(env)? {
+                crate::value::Value::Number(n) => evaluated_args.push(n),
+                other => {
+                    return Err(crate::errors::LispComputerError::TypeMismatch1 {
+                        operation: self.name().to_string(),
+                        left: other,
+                    });
+                }
+            }
+        }
+        for pair in evaluated_args.windows(2) {
+            if pair[0] >= pair[1] {
+                return Ok(crate::value::Value::Boolean(false));
+            }
+        }
+        Ok(crate::value::Value::Boolean(true))
+    }
+
+    fn name(&self) -> &str {
+        ">="
+    }
+}
+
+pub struct LessEqualProcessor;
+
+impl Function for LessEqualProcessor {
+    fn process(
+        &self,
+        args: &[crate::parse::Expression],
+        env: &crate::environment::Environment,
+    ) -> Result<crate::value::Value, crate::errors::LispComputerError> {
+        if args.len() < 2 {
+            return Err(crate::errors::LispComputerError::InvalidArguments(
+                self.name().to_string(),
+                args.to_vec(),
+            ));
+        }
+        let mut evaluated_args = Vec::new();
+        for arg in args {
+            match arg.eval(env)? {
+                crate::value::Value::Number(n) => evaluated_args.push(n),
+                other => {
+                    return Err(crate::errors::LispComputerError::TypeMismatch1 {
+                        operation: self.name().to_string(),
+                        left: other,
+                    });
+                }
+            }
+        }
+        for pair in evaluated_args.windows(2) {
+            if pair[0] >= pair[1] {
+                return Ok(crate::value::Value::Boolean(false));
+            }
+        }
+        Ok(crate::value::Value::Boolean(true))
+    }
+
+    fn name(&self) -> &str {
+        "<="
     }
 }
 
