@@ -7,7 +7,6 @@ mod process;
 mod value;
 
 use parse::parse_expression;
-use process::process_expression;
 use rustyline::{DefaultEditor, error::ReadlineError};
 
 fn main() -> Result<(), LispError> {
@@ -25,7 +24,7 @@ fn main() -> Result<(), LispError> {
 
                 println!("{expression:?}");
 
-                let result = process_expression(&expression, &env)?;
+                let result = expression.eval(&env)?;
 
                 println!("Result: {:?}", result);
                 if line.trim() == "exit" {

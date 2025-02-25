@@ -1,18 +1,22 @@
-use std::collections::HashMap;
+mod lambda;
 
-mod lamda;
-
-pub use lamda::Lambda;
+pub use lambda::Lambda;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     String(String),
     Number(f64),
-    Bool(bool),
-    List(Vec<Value>),
+    Boolean(bool),
     Nil,
-    Lambda(lamda::Lambda),
-    Symbol(String),
-    Keyword(String),
-    Map(HashMap<String, Value>),
+    Lambda(lambda::Lambda),
+}
+
+impl Value {
+    pub fn boolean(&self) -> bool {
+        match self {
+            Value::Boolean(b) => *b,
+            Value::Nil => false,
+            _ => true,
+        }
+    }
 }

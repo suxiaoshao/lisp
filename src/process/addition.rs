@@ -1,6 +1,6 @@
 use crate::{environment::Environment, errors::LispComputerError, parse::Expression, value::Value};
 
-use super::{Function, process_expression};
+use super::Function;
 
 pub struct AdditionProcessor;
 
@@ -10,7 +10,7 @@ impl Function for AdditionProcessor {
         let mut result_string = String::new();
 
         for arg in args {
-            match process_expression(arg, env)? {
+            match arg.eval(env)? {
                 Value::Number(n) => {
                     if result_string.is_empty() {
                         sum += n;

@@ -10,6 +10,11 @@ use nom::{
 };
 use string::parse_string;
 
+use crate::{
+    environment::Environment, errors::LispComputerError, process::process_expression_list,
+    value::Value,
+};
+
 mod string;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -18,6 +23,19 @@ pub enum Expression {
     Variable(String),
     List(Vec<Expression>),
     String(String),
+}
+
+impl Expression {
+    pub fn eval(&self, env: &Environment) -> Result<Value, LispComputerError> {
+        match self {
+            Expression::Number(data) => Ok(Value::Number(*data)),
+            Expression::Variable(value) => env
+                .get_variable(value)
+                .ok_or(LispComputerError::NotFoundVariable(value.to_string())),
+            Expression::List(expressions) => process_expression_list(expressions, env),
+            Expression::String(string) => Ok(Value::String(string.to_string())),
+        }
+    }
 }
 
 pub fn parse_expression(input: &str) -> IResult<&str, Expression> {

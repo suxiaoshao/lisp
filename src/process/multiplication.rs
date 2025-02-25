@@ -1,6 +1,6 @@
 use crate::{environment::Environment, value::Value};
 
-use super::{Function, process_expression};
+use super::Function;
 
 pub struct MultiplicationProcessor;
 
@@ -12,7 +12,7 @@ impl Function for MultiplicationProcessor {
     ) -> Result<crate::value::Value, crate::errors::LispComputerError> {
         let mut result = 1.0;
         for arg in args {
-            match process_expression(arg, env)? {
+            match arg.eval(env)? {
                 Value::Number(num) => result *= num,
                 other => {
                     return Err(crate::errors::LispComputerError::TypeMismatch1 {

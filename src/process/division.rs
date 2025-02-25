@@ -1,6 +1,6 @@
 use crate::{environment::Environment, errors::LispComputerError, value::Value};
 
-use super::{Function, process_expression};
+use super::Function;
 
 pub struct DivisionProcessor;
 
@@ -11,7 +11,7 @@ impl Function for DivisionProcessor {
         env: &Environment,
     ) -> Result<Value, LispComputerError> {
         if let Some((first, rest)) = args.split_first() {
-            let initial_value = match process_expression(first, env)? {
+            let initial_value = match first.eval(env)? {
                 Value::Number(n) => n,
                 value => {
                     return Err(LispComputerError::TypeMismatch1 {
@@ -21,7 +21,7 @@ impl Function for DivisionProcessor {
                 }
             };
             let value = rest.iter().try_fold(initial_value, |acc, expr| {
-                let value = process_expression(expr, env)?;
+                let value = expr.eval(env)?;
                 match value {
                     Value::Number(n) => Ok(acc / n),
                     value => Err(LispComputerError::TypeMismatch2 {

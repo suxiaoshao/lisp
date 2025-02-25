@@ -4,8 +4,8 @@ use crate::{
     errors::LispComputerError,
     parse::Expression,
     process::{
-        AdditionProcessor, DefineProcessor, DivisionProcessor, Function, LambdaProcessor,
-        MultiplicationProcessor, SubtractionProcessor,
+        AdditionProcessor, DefineProcessor, DivisionProcessor, EqualProcessor, Function,
+        IfProcessor, LambdaProcessor, MultiplicationProcessor, SubtractionProcessor,
     },
     value::Value,
 };
@@ -87,6 +87,8 @@ impl Environment {
             LambdaProcessor.name().to_string(),
             Box::new(LambdaProcessor),
         );
+        functions.insert(EqualProcessor.name().to_string(), Box::new(EqualProcessor));
+        functions.insert(IfProcessor.name().to_string(), Box::new(IfProcessor));
 
         functions
     }
