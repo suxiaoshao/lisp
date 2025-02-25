@@ -4,9 +4,10 @@ use crate::{
     errors::LispComputerError,
     parse::Expression,
     process::{
-        AdditionProcessor, DefineProcessor, DivisionProcessor, EqualProcessor, Function,
-        GreaterThanOrEqualProcessor, IfProcessor, LambdaProcessor, LessThanOrEqualProcessor,
-        MultiplicationProcessor, SubtractionProcessor,
+        AdditionProcessor, AndProcessor, CondProcessor, DefineProcessor, DivisionProcessor,
+        EqualProcessor, Function, GreaterEqualProcessor, GreaterThanProcessor, IfProcessor,
+        LambdaProcessor, LessEqualProcessor, LessThanProcessor, MultiplicationProcessor,
+        OrProcessor, SubtractionProcessor,
     },
     value::Value,
 };
@@ -19,8 +20,11 @@ pub struct Environment {
 
 impl Default for Environment {
     fn default() -> Self {
+        let mut variables = HashMap::new();
+        variables.insert("#f".to_string(), Value::Boolean(false));
+        variables.insert("#t".to_string(), Value::Boolean(true));
         Self {
-            variables: RefCell::new(HashMap::new()),
+            variables: RefCell::new(variables),
             parent: None,
         }
     }
@@ -91,21 +95,24 @@ impl Environment {
         functions.insert(EqualProcessor.name().to_string(), Box::new(EqualProcessor));
         functions.insert(IfProcessor.name().to_string(), Box::new(IfProcessor));
         functions.insert(
-            GreaterThanOrEqualProcessor.name().to_string(),
-            Box::new(GreaterThanOrEqualProcessor),
+            GreaterThanProcessor.name().to_string(),
+            Box::new(GreaterThanProcessor),
         );
         functions.insert(
-            LessThanOrEqualProcessor.name().to_string(),
-            Box::new(LessThanOrEqualProcessor),
+            LessThanProcessor.name().to_string(),
+            Box::new(LessThanProcessor),
         );
         functions.insert(
-            LessThanOrEqualProcessor.name().to_string(),
-            Box::new(LessThanOrEqualProcessor),
+            LessEqualProcessor.name().to_string(),
+            Box::new(LessEqualProcessor),
         );
         functions.insert(
-            GreaterThanOrEqualProcessor.name().to_string(),
-            Box::new(GreaterThanOrEqualProcessor),
+            GreaterEqualProcessor.name().to_string(),
+            Box::new(GreaterEqualProcessor),
         );
+        functions.insert(OrProcessor.name().to_string(), Box::new(OrProcessor));
+        functions.insert(AndProcessor.name().to_string(), Box::new(AndProcessor));
+        functions.insert(CondProcessor.name().to_string(), Box::new(CondProcessor));
         functions
     }
 }

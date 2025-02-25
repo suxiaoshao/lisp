@@ -18,6 +18,13 @@ pub fn process_expression_list(
         [] => Ok(Value::Nil),
         [Expression::Number(data)] => Ok(Value::Number(*data)),
         [Expression::Variable(symbol), tail @ ..] => process_variable(symbol, tail, env),
+        [Expression::List(list), tail @ ..] => {
+            if let Value::Lambda(func) = process_expression_list(list, env)? {
+                func.process(tail, env)
+            } else {
+                unimplemented!()
+            }
+        }
         _ => unimplemented!(),
     }
 }
@@ -218,8 +225,8 @@ impl Function for EqualProcessor {
     }
 }
 
-pub struct GreaterThanOrEqualProcessor;
-impl Function for GreaterThanOrEqualProcessor {
+pub struct GreaterThanProcessor;
+impl Function for GreaterThanProcessor {
     fn process(
         &self,
         args: &[crate::parse::Expression],
@@ -260,9 +267,9 @@ impl Function for GreaterThanOrEqualProcessor {
     }
 }
 
-pub struct LessThanOrEqualProcessor;
+pub struct LessThanProcessor;
 
-impl Function for LessThanOrEqualProcessor {
+impl Function for LessThanProcessor {
     fn process(
         &self,
         args: &[crate::parse::Expression],
@@ -289,7 +296,7 @@ impl Function for LessThanOrEqualProcessor {
         }
 
         for pair in evaluated_args.windows(2) {
-            if pair[0] <= pair[1] {
+            if pair[0] >= pair[1] {
                 return Ok(crate::value::Value::Boolean(false));
             }
         }
@@ -326,7 +333,7 @@ impl Function for GreaterEqualProcessor {
             }
         }
         for pair in evaluated_args.windows(2) {
-            if pair[0] >= pair[1] {
+            if pair[0] < pair[1] {
                 return Ok(crate::value::Value::Boolean(false));
             }
         }
@@ -365,7 +372,7 @@ impl Function for LessEqualProcessor {
             }
         }
         for pair in evaluated_args.windows(2) {
-            if pair[0] >= pair[1] {
+            if pair[0] > pair[1] {
                 return Ok(crate::value::Value::Boolean(false));
             }
         }
@@ -429,6 +436,90 @@ impl Function for IfProcessor {
 
     fn name(&self) -> &str {
         "if"
+    }
+}
+
+pub struct OrProcessor;
+
+impl Function for OrProcessor {
+    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
+        let mut last_value = Value::Boolean(false);
+
+        for arg in args {
+            let value = arg.eval(env)?;
+            if value.boolean() {
+                return Ok(value);
+            }
+            last_value = value;
+        }
+
+        Ok(last_value)
+    }
+
+    fn name(&self) -> &str {
+        "or"
+    }
+}
+
+pub struct AndProcessor;
+
+impl Function for AndProcessor {
+    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
+        let mut last_value = Value::Boolean(true);
+
+        for arg in args {
+            let value = arg.eval(env)?;
+            if !value.boolean() {
+                return Ok(value);
+            }
+            last_value = value;
+        }
+
+        Ok(last_value)
+    }
+
+    fn name(&self) -> &str {
+        "and"
+    }
+}
+
+pub struct CondProcessor;
+
+impl Function for CondProcessor {
+    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
+        for arg in args {
+            match arg {
+                Expression::List(inner_args) => match inner_args.as_slice() {
+                    [Expression::Variable(name), result] if name == "else" => {
+                        return result.eval(env);
+                    }
+                    [condition, result] => {
+                        let condition_value = condition.eval(env)?;
+                        if condition_value.boolean() {
+                            return result.eval(env);
+                        }
+                    }
+                    _ => {
+                        return Err(LispComputerError::InvalidArguments(
+                            self.name().to_string(),
+                            args.to_vec(),
+                        ));
+                    }
+                },
+                _ => {
+                    return Err(LispComputerError::InvalidArguments(
+                        self.name().to_string(),
+                        args.to_vec(),
+                    ));
+                }
+            }
+        }
+
+        Ok(Value::Boolean(false))
+    }
+
+    fn name(&self) -> &str {
+        "cond"
     }
 }
 
