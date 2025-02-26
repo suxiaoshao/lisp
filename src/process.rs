@@ -87,11 +87,7 @@ impl Function for AdditionProcessor {
 pub struct DivisionProcessor;
 
 impl Function for DivisionProcessor {
-    fn process(
-        &self,
-        args: &[crate::parse::Expression],
-        env: &Environment,
-    ) -> Result<Value, LispComputerError> {
+    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
         if let Some((first, rest)) = args.split_first() {
             let initial_value = match first.eval(env)? {
                 Value::Number(n) => n,
@@ -129,24 +125,20 @@ impl Function for DivisionProcessor {
 pub struct MultiplicationProcessor;
 
 impl Function for MultiplicationProcessor {
-    fn process(
-        &self,
-        args: &[crate::parse::Expression],
-        env: &Environment,
-    ) -> Result<crate::value::Value, crate::errors::LispComputerError> {
+    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
         let mut result = 1.0;
         for arg in args {
             match arg.eval(env)? {
                 Value::Number(num) => result *= num,
                 other => {
-                    return Err(crate::errors::LispComputerError::TypeMismatch1 {
+                    return Err(LispComputerError::TypeMismatch1 {
                         operation: self.name().to_string(),
                         left: other,
                     });
                 }
             }
         }
-        Ok(crate::value::Value::Number(result))
+        Ok(Value::Number(result))
     }
 
     fn name(&self) -> &str {
@@ -194,13 +186,9 @@ impl Function for SubtractionProcessor {
 
 pub struct EqualProcessor;
 impl Function for EqualProcessor {
-    fn process(
-        &self,
-        args: &[crate::parse::Expression],
-        env: &crate::environment::Environment,
-    ) -> Result<crate::value::Value, crate::errors::LispComputerError> {
+    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
         if args.len() < 2 {
-            return Err(crate::errors::LispComputerError::ArityMismatch(
+            return Err(LispComputerError::ArityMismatch(
                 self.name().to_string(),
                 2,
                 args.len(),
@@ -214,11 +202,11 @@ impl Function for EqualProcessor {
 
         for pair in evaluated_args.windows(2) {
             if pair[0] != pair[1] {
-                return Ok(crate::value::Value::Boolean(false));
+                return Ok(Value::Boolean(false));
             }
         }
 
-        Ok(crate::value::Value::Boolean(true))
+        Ok(Value::Boolean(true))
     }
     fn name(&self) -> &str {
         "="
@@ -227,13 +215,9 @@ impl Function for EqualProcessor {
 
 pub struct GreaterThanProcessor;
 impl Function for GreaterThanProcessor {
-    fn process(
-        &self,
-        args: &[crate::parse::Expression],
-        env: &crate::environment::Environment,
-    ) -> Result<crate::value::Value, crate::errors::LispComputerError> {
+    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
         if args.len() < 2 {
-            return Err(crate::errors::LispComputerError::ArityMismatch(
+            return Err(LispComputerError::ArityMismatch(
                 self.name().to_string(),
                 2,
                 args.len(),
@@ -243,9 +227,9 @@ impl Function for GreaterThanProcessor {
         let mut evaluated_args = Vec::new();
         for arg in args {
             match arg.eval(env)? {
-                crate::value::Value::Number(n) => evaluated_args.push(n),
+                Value::Number(n) => evaluated_args.push(n),
                 other => {
-                    return Err(crate::errors::LispComputerError::TypeMismatch1 {
+                    return Err(LispComputerError::TypeMismatch1 {
                         operation: self.name().to_string(),
                         left: other,
                     });
@@ -255,11 +239,11 @@ impl Function for GreaterThanProcessor {
 
         for pair in evaluated_args.windows(2) {
             if pair[0] <= pair[1] {
-                return Ok(crate::value::Value::Boolean(false));
+                return Ok(Value::Boolean(false));
             }
         }
 
-        Ok(crate::value::Value::Boolean(true))
+        Ok(Value::Boolean(true))
     }
 
     fn name(&self) -> &str {
@@ -270,13 +254,9 @@ impl Function for GreaterThanProcessor {
 pub struct LessThanProcessor;
 
 impl Function for LessThanProcessor {
-    fn process(
-        &self,
-        args: &[crate::parse::Expression],
-        env: &crate::environment::Environment,
-    ) -> Result<crate::value::Value, crate::errors::LispComputerError> {
+    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
         if args.len() < 2 {
-            return Err(crate::errors::LispComputerError::InvalidArguments(
+            return Err(LispComputerError::InvalidArguments(
                 self.name().to_string(),
                 args.to_vec(),
             ));
@@ -285,9 +265,9 @@ impl Function for LessThanProcessor {
         let mut evaluated_args = Vec::new();
         for arg in args {
             match arg.eval(env)? {
-                crate::value::Value::Number(n) => evaluated_args.push(n),
+                Value::Number(n) => evaluated_args.push(n),
                 other => {
-                    return Err(crate::errors::LispComputerError::TypeMismatch1 {
+                    return Err(LispComputerError::TypeMismatch1 {
                         operation: self.name().to_string(),
                         left: other,
                     });
@@ -297,11 +277,11 @@ impl Function for LessThanProcessor {
 
         for pair in evaluated_args.windows(2) {
             if pair[0] >= pair[1] {
-                return Ok(crate::value::Value::Boolean(false));
+                return Ok(Value::Boolean(false));
             }
         }
 
-        Ok(crate::value::Value::Boolean(true))
+        Ok(Value::Boolean(true))
     }
 
     fn name(&self) -> &str {
@@ -314,7 +294,7 @@ pub struct GreaterEqualProcessor;
 impl Function for GreaterEqualProcessor {
     fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
         if args.len() < 2 {
-            return Err(crate::errors::LispComputerError::InvalidArguments(
+            return Err(LispComputerError::InvalidArguments(
                 self.name().to_string(),
                 args.to_vec(),
             ));
@@ -323,9 +303,9 @@ impl Function for GreaterEqualProcessor {
 
         for arg in args {
             match arg.eval(env)? {
-                crate::value::Value::Number(n) => evaluated_args.push(n),
+                Value::Number(n) => evaluated_args.push(n),
                 other => {
-                    return Err(crate::errors::LispComputerError::TypeMismatch1 {
+                    return Err(LispComputerError::TypeMismatch1 {
                         operation: self.name().to_string(),
                         left: other,
                     });
@@ -334,10 +314,10 @@ impl Function for GreaterEqualProcessor {
         }
         for pair in evaluated_args.windows(2) {
             if pair[0] < pair[1] {
-                return Ok(crate::value::Value::Boolean(false));
+                return Ok(Value::Boolean(false));
             }
         }
-        Ok(crate::value::Value::Boolean(true))
+        Ok(Value::Boolean(true))
     }
 
     fn name(&self) -> &str {
@@ -348,13 +328,9 @@ impl Function for GreaterEqualProcessor {
 pub struct LessEqualProcessor;
 
 impl Function for LessEqualProcessor {
-    fn process(
-        &self,
-        args: &[crate::parse::Expression],
-        env: &crate::environment::Environment,
-    ) -> Result<crate::value::Value, crate::errors::LispComputerError> {
+    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
         if args.len() < 2 {
-            return Err(crate::errors::LispComputerError::InvalidArguments(
+            return Err(LispComputerError::InvalidArguments(
                 self.name().to_string(),
                 args.to_vec(),
             ));
@@ -362,9 +338,9 @@ impl Function for LessEqualProcessor {
         let mut evaluated_args = Vec::new();
         for arg in args {
             match arg.eval(env)? {
-                crate::value::Value::Number(n) => evaluated_args.push(n),
+                Value::Number(n) => evaluated_args.push(n),
                 other => {
-                    return Err(crate::errors::LispComputerError::TypeMismatch1 {
+                    return Err(LispComputerError::TypeMismatch1 {
                         operation: self.name().to_string(),
                         left: other,
                     });
@@ -373,10 +349,10 @@ impl Function for LessEqualProcessor {
         }
         for pair in evaluated_args.windows(2) {
             if pair[0] > pair[1] {
-                return Ok(crate::value::Value::Boolean(false));
+                return Ok(Value::Boolean(false));
             }
         }
-        Ok(crate::value::Value::Boolean(true))
+        Ok(Value::Boolean(true))
     }
 
     fn name(&self) -> &str {
@@ -387,18 +363,35 @@ impl Function for LessEqualProcessor {
 pub struct DefineProcessor;
 
 impl Function for DefineProcessor {
-    fn process(
-        &self,
-        args: &[crate::parse::Expression],
-        env: &crate::environment::Environment,
-    ) -> Result<crate::value::Value, crate::errors::LispComputerError> {
+    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
         match args {
-            [crate::parse::Expression::Variable(name), value] => {
+            [Expression::Variable(name), value] => {
                 let value = value.eval(env)?;
                 env.set_variable(name.to_string(), value);
-                Ok(crate::value::Value::Nil)
+                Ok(Value::Nil)
             }
-            _ => Err(crate::errors::LispComputerError::InvalidArguments(
+            [Expression::List(params), Expression::List(body)] => match params.as_slice() {
+                [Expression::Variable(name), tail @ ..] => {
+                    let params = tail
+                        .iter()
+                        .map(|param| match param {
+                            Expression::Variable(name) => Ok(name.clone()),
+                            _ => Err(LispComputerError::InvalidArguments(
+                                "lambda-params".to_string(),
+                                params.clone(),
+                            )),
+                        })
+                        .collect::<Result<Vec<String>, LispComputerError>>()?;
+                    let lambda = Lambda::new(params, body.clone());
+                    env.set_variable(name.to_string(), Value::Lambda(lambda));
+                    Ok(Value::Nil)
+                }
+                _ => Err(LispComputerError::InvalidArguments(
+                    self.name().to_string(),
+                    args.to_vec(),
+                )),
+            },
+            _ => Err(LispComputerError::InvalidArguments(
                 self.name().to_string(),
                 args.to_vec(),
             )),
@@ -413,11 +406,7 @@ impl Function for DefineProcessor {
 pub struct IfProcessor;
 
 impl Function for IfProcessor {
-    fn process(
-        &self,
-        args: &[crate::parse::Expression],
-        env: &crate::environment::Environment,
-    ) -> Result<crate::value::Value, crate::errors::LispComputerError> {
+    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
         match args {
             [condition, then_branch, else_branch] => {
                 let condition = condition.eval(env)?.boolean();
@@ -426,7 +415,7 @@ impl Function for IfProcessor {
                     false => else_branch.eval(env),
                 }
             }
-            _ => Err(crate::errors::LispComputerError::ArityMismatch(
+            _ => Err(LispComputerError::ArityMismatch(
                 self.name().to_string(),
                 3,
                 args.len(),
@@ -525,11 +514,7 @@ impl Function for CondProcessor {
 
 pub struct LambdaProcessor;
 impl Function for LambdaProcessor {
-    fn process(
-        &self,
-        args: &[crate::parse::Expression],
-        _env: &crate::environment::Environment,
-    ) -> Result<crate::value::Value, crate::errors::LispComputerError> {
+    fn process(&self, args: &[Expression], _env: &Environment) -> Result<Value, LispComputerError> {
         match args {
             [Expression::List(params), Expression::List(body)] => {
                 let params = params
