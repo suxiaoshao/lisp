@@ -30,4 +30,6 @@ pub enum LispComputerError {
     NotFoundVariable(String),
     #[error("Arity mismatch {}: expected {}, got {}",.0,.1,.2)]
     ArityMismatch(String, usize, usize),
+    #[error("Let naming not return")]
+    LetNamingNotReturn,
 }

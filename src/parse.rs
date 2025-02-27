@@ -25,6 +25,7 @@ pub enum Expression {
     Variable(String),
     List(Vec<Expression>),
     String(String),
+    NamingList(String, Vec<Expression>),
 }
 
 impl Expression {
@@ -40,6 +41,7 @@ impl Expression {
                 .ok_or(LispComputerError::NotFoundVariable(value.to_string())),
             Expression::List(expressions) => process_expression_list(expressions, env, variables),
             Expression::String(string) => Ok(Value::String(string.to_string())),
+            Expression::NamingList(_, _) => Err(LispComputerError::LetNamingNotReturn),
         }
     }
 }
@@ -50,6 +52,15 @@ pub fn parse_expression(input: &str) -> IResult<&str, Expression> {
         map(
             (tag("("), parse_expression_inner, tag(")")),
             |(_, data, _)| Expression::List(data),
+        ),
+        map(
+            (
+                parse_lisp_variable,
+                tag("("),
+                parse_expression_inner,
+                tag(")"),
+            ),
+            |(name, _, expr, _)| Expression::NamingList(name, expr),
         ),
         map(parse_lisp_variable, Expression::Variable),
         map(parse_string, Expression::String),

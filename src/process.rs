@@ -633,32 +633,58 @@ impl<T: Environment> Function<T> for LetProcessor {
         env: &T,
         variables: &HashMap<&str, Value>,
     ) -> Result<Value, LispComputerError> {
-        match args {
-            [Expression::List(bindings), body] => {
-                let mut new_variables = variables.clone();
-                for binding in bindings {
-                    match binding {
-                        Expression::List(binding) => match binding.as_slice() {
-                            [Expression::Variable(name), value] => {
-                                new_variables.insert(name.as_str(), value.eval(env, variables)?);
-                            }
-                            _ => {
-                                return Err(LispComputerError::InvalidArguments(
-                                    "let-bindings".to_string(),
-                                    binding.clone(),
-                                ));
-                            }
-                        },
+        fn get_lambda_from(
+            bindings: &Vec<Expression>,
+            body: &Vec<Expression>,
+        ) -> Result<(Lambda, Vec<Expression>), LispComputerError> {
+            let mut params = Vec::new();
+            let mut lambda_args = Vec::new();
+            for binding in bindings {
+                match binding {
+                    Expression::List(binding) => match binding.as_slice() {
+                        [Expression::Variable(name), value] => {
+                            params.push(name.to_string());
+                            lambda_args.push(value.clone());
+                        }
                         _ => {
                             return Err(LispComputerError::InvalidArguments(
                                 "let-bindings".to_string(),
-                                bindings.clone(),
+                                binding.clone(),
                             ));
                         }
+                    },
+                    _ => {
+                        return Err(LispComputerError::InvalidArguments(
+                            "let-bindings".to_string(),
+                            bindings.clone(),
+                        ));
                     }
                 }
+            }
 
-                body.eval(env, &new_variables)
+            let lambda = Lambda::new(params, body.clone());
+            Ok((lambda, lambda_args))
+        }
+        match args {
+            // let
+            [Expression::List(bindings), Expression::List(body)] => {
+                let (lambda, lambda_args) = get_lambda_from(bindings, body)?;
+                lambda.process(&lambda_args, env, variables)
+            }
+            // let naming
+            [
+                Expression::NamingList(name, bindings),
+                Expression::List(body),
+            ]
+            | [
+                Expression::Variable(name),
+                Expression::List(bindings),
+                Expression::List(body),
+            ] => {
+                let mut variables = variables.clone();
+                let (lambda, lambda_args) = get_lambda_from(bindings, body)?;
+                variables.insert(name, Value::Lambda(lambda.clone()));
+                lambda.process(&lambda_args, env, &variables)
             }
             _ => Err(LispComputerError::InvalidArguments(
                 <LetProcessor as Function<T>>::name(self).to_string(),
