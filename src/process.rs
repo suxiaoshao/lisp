@@ -510,35 +510,29 @@ impl<T: Environment> Function<T> for CondProcessor {
         env: &T,
         variables: &HashMap<&str, Value>,
     ) -> Result<Value, LispComputerError> {
-        for arg in args {
-            match arg {
-                Expression::List(inner_args) => match inner_args.as_slice() {
-                    [Expression::Variable(name), result] if name == "else" => {
-                        return result.eval(env, variables);
-                    }
-                    [condition, result] => {
+        if let Some((last, args)) = args.split_last() {
+            for arg in args {
+                if let Expression::List(inner_args) = arg {
+                    if let [condition, result] = inner_args.as_slice() {
                         let condition_value = condition.eval(env, variables)?;
                         if condition_value.boolean() {
                             return result.eval(env, variables);
                         }
                     }
-                    _ => {
-                        return Err(LispComputerError::InvalidArguments(
-                            <CondProcessor as Function<T>>::name(self).to_string(),
-                            args.to_vec(),
-                        ));
+                }
+            }
+            if let Expression::List(inner_args) = last {
+                if let [Expression::Variable(name), result] = inner_args.as_slice() {
+                    if name == "else" {
+                        return result.eval(env, variables);
                     }
-                },
-                _ => {
-                    return Err(LispComputerError::InvalidArguments(
-                        <CondProcessor as Function<T>>::name(self).to_string(),
-                        args.to_vec(),
-                    ));
                 }
             }
         }
-
-        Ok(Value::Boolean(false))
+        Err(LispComputerError::InvalidArguments(
+            <CondProcessor as Function<T>>::name(self).to_string(),
+            args.to_vec(),
+        ))
     }
 
     fn name(&self) -> &str {
@@ -628,5 +622,52 @@ impl<T: Environment> Function<T> for LambdaProcessor {
 
     fn name(&self) -> &str {
         "lambda"
+    }
+}
+
+pub struct LetProcessor;
+impl<T: Environment> Function<T> for LetProcessor {
+    fn process(
+        &self,
+        args: &[Expression],
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
+        match args {
+            [Expression::List(bindings), body] => {
+                let mut new_variables = variables.clone();
+                for binding in bindings {
+                    match binding {
+                        Expression::List(binding) => match binding.as_slice() {
+                            [Expression::Variable(name), value] => {
+                                new_variables.insert(name.as_str(), value.eval(env, variables)?);
+                            }
+                            _ => {
+                                return Err(LispComputerError::InvalidArguments(
+                                    "let-bindings".to_string(),
+                                    binding.clone(),
+                                ));
+                            }
+                        },
+                        _ => {
+                            return Err(LispComputerError::InvalidArguments(
+                                "let-bindings".to_string(),
+                                bindings.clone(),
+                            ));
+                        }
+                    }
+                }
+
+                body.eval(env, &new_variables)
+            }
+            _ => Err(LispComputerError::InvalidArguments(
+                <LetProcessor as Function<T>>::name(self).to_string(),
+                args.to_vec(),
+            )),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "let"
     }
 }

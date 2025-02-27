@@ -6,8 +6,8 @@ use crate::{
     process::{
         AdditionProcessor, AndProcessor, CondProcessor, DefineProcessor, DivisionProcessor,
         EqualProcessor, Function, GreaterEqualProcessor, GreaterThanProcessor, IfProcessor,
-        LambdaProcessor, LessEqualProcessor, LessThanProcessor, MultiplicationProcessor,
-        OrProcessor, SubtractionProcessor,
+        LambdaProcessor, LessEqualProcessor, LessThanProcessor, LetProcessor,
+        MultiplicationProcessor, OrProcessor, SubtractionProcessor,
     },
     value::Value,
 };
@@ -132,6 +132,10 @@ impl GlobalEnvironment {
         functions.insert(
             <CondProcessor as Function<T>>::name(&CondProcessor).to_string(),
             Box::new(CondProcessor),
+        );
+        functions.insert(
+            <LetProcessor as Function<T>>::name(&LetProcessor).to_string(),
+            Box::new(LetProcessor),
         );
         functions
     }
