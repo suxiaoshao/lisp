@@ -12,107 +12,127 @@ use crate::{
     value::Value,
 };
 
-#[derive(Debug, Clone)]
-pub struct Environment {
-    parent: Option<Box<Environment>>,
+pub trait Environment {
+    fn process_variable(
+        &self,
+        symbol: &str,
+        args: &[Expression],
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError>;
+    fn set_variable(&self, name: String, value: Value);
+    fn get_variable(&self, name: &str, variables: &HashMap<&str, Value>) -> Option<Value>;
+}
+
+#[derive(Debug)]
+pub struct GlobalEnvironment {
     variables: RefCell<HashMap<String, Value>>,
 }
 
-impl Default for Environment {
+impl Default for GlobalEnvironment {
     fn default() -> Self {
         let mut variables = HashMap::new();
         variables.insert("#f".to_string(), Value::Boolean(false));
         variables.insert("#t".to_string(), Value::Boolean(true));
         Self {
             variables: RefCell::new(variables),
-            parent: None,
         }
     }
 }
 
-impl Environment {
-    pub fn process_variable(
+impl Environment for GlobalEnvironment {
+    fn process_variable(
         &self,
         symbol: &str,
         args: &[Expression],
+        variables: &HashMap<&str, Value>,
     ) -> Result<Value, LispComputerError> {
         if let Some(func) = self.get_language_function(symbol) {
-            return func.process(args, self);
+            return func.process(args, self, variables);
         };
-        if let Some(Value::Lambda(lamda)) = self.get_variable(symbol) {
-            return lamda.process(args, self);
+        if let Some(Value::Lambda(lamda)) = self.get_variable(symbol, variables) {
+            return lamda.process(args, self, variables);
         }
         Err(LispComputerError::UnboundFunction(symbol.to_string()))
     }
-    pub fn set_variable(&self, name: String, value: Value) {
+    fn set_variable(&self, name: String, value: Value) {
         self.variables.borrow_mut().insert(name, value);
     }
-    pub fn get_variable(&self, name: &str) -> Option<Value> {
+    fn get_variable(&self, name: &str, variables: &HashMap<&str, Value>) -> Option<Value> {
         if let Some(value) = self.variables.borrow().get(name).cloned() {
             Some(value)
-        } else if let Some(ref parent) = self.parent {
-            parent.get_variable(name)
         } else {
-            None
+            variables.get(name).cloned()
         }
     }
-    pub fn new_child(&self, variables: HashMap<String, Value>) -> Self {
-        Self {
-            variables: RefCell::new(variables),
-            parent: Some(Box::new(self.clone())),
-        }
-    }
-    fn get_language_function(&self, name: &str) -> Option<Box<dyn Function>> {
+}
+
+impl GlobalEnvironment {
+    fn get_language_function<T: Environment>(&self, name: &str) -> Option<Box<dyn Function<T>>> {
         let mut functions = Self::language_function_map();
         functions.remove(name)
     }
-    fn language_function_map() -> HashMap<String, Box<dyn Function>> {
-        let mut functions: HashMap<String, Box<dyn Function>> = HashMap::new();
+    fn language_function_map<T: Environment>() -> HashMap<String, Box<dyn Function<T>>> {
+        let mut functions: HashMap<String, Box<dyn Function<T>>> = HashMap::new();
         functions.insert(
-            AdditionProcessor.name().to_string(),
+            <AdditionProcessor as Function<T>>::name(&AdditionProcessor).to_string(),
             Box::new(AdditionProcessor),
         );
         functions.insert(
-            SubtractionProcessor.name().to_string(),
+            <SubtractionProcessor as Function<T>>::name(&SubtractionProcessor).to_string(),
             Box::new(SubtractionProcessor),
         );
         functions.insert(
-            MultiplicationProcessor.name().to_string(),
+            <MultiplicationProcessor as Function<T>>::name(&MultiplicationProcessor).to_string(),
             Box::new(MultiplicationProcessor),
         );
         functions.insert(
-            DivisionProcessor.name().to_string(),
+            <DivisionProcessor as Function<T>>::name(&DivisionProcessor).to_string(),
             Box::new(DivisionProcessor),
         );
         functions.insert(
-            DefineProcessor.name().to_string(),
+            <DefineProcessor as Function<T>>::name(&DefineProcessor).to_string(),
             Box::new(DefineProcessor),
         );
         functions.insert(
-            LambdaProcessor.name().to_string(),
+            <LambdaProcessor as Function<T>>::name(&LambdaProcessor).to_string(),
             Box::new(LambdaProcessor),
         );
-        functions.insert(EqualProcessor.name().to_string(), Box::new(EqualProcessor));
-        functions.insert(IfProcessor.name().to_string(), Box::new(IfProcessor));
         functions.insert(
-            GreaterThanProcessor.name().to_string(),
+            <EqualProcessor as Function<T>>::name(&EqualProcessor).to_string(),
+            Box::new(EqualProcessor),
+        );
+        functions.insert(
+            <IfProcessor as Function<T>>::name(&IfProcessor).to_string(),
+            Box::new(IfProcessor),
+        );
+        functions.insert(
+            <GreaterThanProcessor as Function<T>>::name(&GreaterThanProcessor).to_string(),
             Box::new(GreaterThanProcessor),
         );
         functions.insert(
-            LessThanProcessor.name().to_string(),
+            <LessThanProcessor as Function<T>>::name(&LessThanProcessor).to_string(),
             Box::new(LessThanProcessor),
         );
         functions.insert(
-            LessEqualProcessor.name().to_string(),
+            <LessEqualProcessor as Function<T>>::name(&LessEqualProcessor).to_string(),
             Box::new(LessEqualProcessor),
         );
         functions.insert(
-            GreaterEqualProcessor.name().to_string(),
+            <GreaterEqualProcessor as Function<T>>::name(&GreaterEqualProcessor).to_string(),
             Box::new(GreaterEqualProcessor),
         );
-        functions.insert(OrProcessor.name().to_string(), Box::new(OrProcessor));
-        functions.insert(AndProcessor.name().to_string(), Box::new(AndProcessor));
-        functions.insert(CondProcessor.name().to_string(), Box::new(CondProcessor));
+        functions.insert(
+            <OrProcessor as Function<T>>::name(&OrProcessor).to_string(),
+            Box::new(OrProcessor),
+        );
+        functions.insert(
+            <AndProcessor as Function<T>>::name(&AndProcessor).to_string(),
+            Box::new(AndProcessor),
+        );
+        functions.insert(
+            <CondProcessor as Function<T>>::name(&CondProcessor).to_string(),
+            Box::new(CondProcessor),
+        );
         functions
     }
 }

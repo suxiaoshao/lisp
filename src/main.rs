@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use errors::LispError;
 
 mod environment;
@@ -11,7 +13,7 @@ use rustyline::{DefaultEditor, error::ReadlineError};
 
 fn main() -> Result<(), LispError> {
     let mut rl = DefaultEditor::new()?;
-    let env = environment::Environment::default();
+    let env = environment::GlobalEnvironment::default();
 
     loop {
         let readline = rl.readline(">> ");
@@ -24,7 +26,7 @@ fn main() -> Result<(), LispError> {
 
                 println!("{expression:?}");
 
-                let result = expression.eval(&env)?;
+                let result = expression.eval(&env, &HashMap::new())?;
 
                 println!("Result: {:?}", result);
                 if line.trim() == "exit" {

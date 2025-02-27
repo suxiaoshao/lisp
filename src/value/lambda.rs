@@ -1,9 +1,13 @@
 use std::collections::HashMap;
 
 use crate::{
+    environment::Environment,
+    errors::LispComputerError,
     parse::Expression,
     process::{Function, process_expression_list},
 };
+
+use super::Value;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lambda {
@@ -17,25 +21,25 @@ impl Lambda {
     }
 }
 
-impl Function for Lambda {
+impl<T: Environment> Function<T> for Lambda {
     fn process(
         &self,
         args: &[Expression],
-        env: &crate::environment::Environment,
-    ) -> Result<super::Value, crate::errors::LispComputerError> {
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<super::Value, LispComputerError> {
         if args.len() != self.params.len() {
-            return Err(crate::errors::LispComputerError::ArityMismatch(
-                self.name().to_string(),
+            return Err(LispComputerError::ArityMismatch(
+                <Lambda as Function<T>>::name(self).to_string(),
                 self.params.len(),
                 args.len(),
             ));
         }
-        let mut variables = HashMap::new();
+        let mut new_variables = variables.clone();
         for (param, arg) in self.params.iter().zip(args) {
-            variables.insert(param.clone(), arg.eval(env)?);
+            new_variables.insert(param.as_str(), arg.eval(env, variables)?);
         }
-        let new_env = env.new_child(variables);
-        process_expression_list(&self.body, &new_env)
+        process_expression_list(&self.body, env, &new_variables)
     }
 
     fn name(&self) -> &str {

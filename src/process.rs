@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{
     environment::Environment,
     errors::LispComputerError,
@@ -5,22 +7,31 @@ use crate::{
     value::{Lambda, Value},
 };
 
-pub trait Function {
-    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError>;
+pub trait Function<T>
+where
+    T: Environment,
+{
+    fn process(
+        &self,
+        args: &[Expression],
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError>;
     fn name(&self) -> &str;
 }
 
-pub fn process_expression_list(
+pub fn process_expression_list<T: Environment>(
     expressions: &[Expression],
-    env: &Environment,
+    env: &T,
+    variables: &HashMap<&str, Value>,
 ) -> Result<Value, LispComputerError> {
     match expressions {
         [] => Ok(Value::Nil),
         [Expression::Number(data)] => Ok(Value::Number(*data)),
-        [Expression::Variable(symbol), tail @ ..] => process_variable(symbol, tail, env),
+        [Expression::Variable(symbol), tail @ ..] => process_variable(symbol, tail, env, variables),
         [Expression::List(list), tail @ ..] => {
-            if let Value::Lambda(func) = process_expression_list(list, env)? {
-                func.process(tail, env)
+            if let Value::Lambda(func) = process_expression_list(list, env, variables)? {
+                func.process(tail, env, variables)
             } else {
                 unimplemented!()
             }
@@ -29,29 +40,35 @@ pub fn process_expression_list(
     }
 }
 
-fn process_variable(
+fn process_variable<T: Environment>(
     symbol: &str,
     args: &[Expression],
-    env: &Environment,
+    env: &T,
+    variables: &HashMap<&str, Value>,
 ) -> Result<Value, LispComputerError> {
-    env.process_variable(symbol, args)
+    env.process_variable(symbol, args, variables)
 }
 
 pub struct AdditionProcessor;
 
-impl Function for AdditionProcessor {
-    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
+impl<T: Environment> Function<T> for AdditionProcessor {
+    fn process(
+        &self,
+        args: &[Expression],
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
         let mut sum = 0.0;
         let mut result_string = String::new();
 
         for arg in args {
-            match arg.eval(env)? {
+            match arg.eval(env, variables)? {
                 Value::Number(n) => {
                     if result_string.is_empty() {
                         sum += n;
                     } else {
                         return Err(LispComputerError::TypeMismatch2 {
-                            operation: self.name().to_string(),
+                            operation: <AdditionProcessor as Function<T>>::name(self).to_string(),
                             left: Value::String(result_string),
                             right: Value::Number(n),
                         });
@@ -62,7 +79,7 @@ impl Function for AdditionProcessor {
                         result_string.push_str(&s);
                     } else {
                         return Err(LispComputerError::TypeMismatch2 {
-                            operation: self.name().to_string(),
+                            operation: <AdditionProcessor as Function<T>>::name(self).to_string(),
                             left: Value::Number(sum),
                             right: Value::String(s.to_string()),
                         });
@@ -86,24 +103,29 @@ impl Function for AdditionProcessor {
 
 pub struct DivisionProcessor;
 
-impl Function for DivisionProcessor {
-    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
+impl<T: Environment> Function<T> for DivisionProcessor {
+    fn process(
+        &self,
+        args: &[Expression],
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
         if let Some((first, rest)) = args.split_first() {
-            let initial_value = match first.eval(env)? {
+            let initial_value = match first.eval(env, variables)? {
                 Value::Number(n) => n,
                 value => {
                     return Err(LispComputerError::TypeMismatch1 {
-                        operation: self.name().to_string(),
+                        operation: <DivisionProcessor as Function<T>>::name(self).to_string(),
                         left: value,
                     });
                 }
             };
             let value = rest.iter().try_fold(initial_value, |acc, expr| {
-                let value = expr.eval(env)?;
+                let value = expr.eval(env, variables)?;
                 match value {
                     Value::Number(n) => Ok(acc / n),
                     value => Err(LispComputerError::TypeMismatch2 {
-                        operation: self.name().to_string(),
+                        operation: <DivisionProcessor as Function<T>>::name(self).to_string(),
                         left: Value::Number(acc),
                         right: value,
                     }),
@@ -112,7 +134,7 @@ impl Function for DivisionProcessor {
             Ok(Value::Number(value))
         } else {
             Err(LispComputerError::TypeMismatch1 {
-                operation: self.name().to_string(),
+                operation: <DivisionProcessor as Function<T>>::name(self).to_string(),
                 left: Value::Nil,
             })
         }
@@ -124,15 +146,20 @@ impl Function for DivisionProcessor {
 
 pub struct MultiplicationProcessor;
 
-impl Function for MultiplicationProcessor {
-    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
+impl<T: Environment> Function<T> for MultiplicationProcessor {
+    fn process(
+        &self,
+        args: &[Expression],
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
         let mut result = 1.0;
         for arg in args {
-            match arg.eval(env)? {
+            match arg.eval(env, variables)? {
                 Value::Number(num) => result *= num,
                 other => {
                     return Err(LispComputerError::TypeMismatch1 {
-                        operation: self.name().to_string(),
+                        operation: <MultiplicationProcessor as Function<T>>::name(self).to_string(),
                         left: other,
                     });
                 }
@@ -148,24 +175,29 @@ impl Function for MultiplicationProcessor {
 
 pub struct SubtractionProcessor;
 
-impl Function for SubtractionProcessor {
-    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
+impl<T: Environment> Function<T> for SubtractionProcessor {
+    fn process(
+        &self,
+        args: &[Expression],
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
         if let Some((first, rest)) = args.split_first() {
-            let initial_value = match first.eval(env)? {
+            let initial_value = match first.eval(env, variables)? {
                 Value::Number(value) => value,
                 other => {
                     return Err(LispComputerError::TypeMismatch1 {
-                        operation: self.name().to_string(),
+                        operation: <SubtractionProcessor as Function<T>>::name(self).to_string(),
                         left: other,
                     });
                 }
             };
             let value = rest.iter().try_fold(initial_value, |acc, expr| {
-                let value = expr.eval(env)?;
+                let value = expr.eval(env, variables)?;
                 match value {
                     Value::Number(num) => Ok(acc - num),
                     other => Err(LispComputerError::TypeMismatch1 {
-                        operation: self.name().to_string(),
+                        operation: <SubtractionProcessor as Function<T>>::name(self).to_string(),
                         left: other,
                     }),
                 }
@@ -173,7 +205,7 @@ impl Function for SubtractionProcessor {
             Ok(Value::Number(value))
         } else {
             Err(LispComputerError::TypeMismatch1 {
-                operation: self.name().to_string(),
+                operation: <SubtractionProcessor as Function<T>>::name(self).to_string(),
                 left: Value::Nil,
             })
         }
@@ -185,11 +217,16 @@ impl Function for SubtractionProcessor {
 }
 
 pub struct EqualProcessor;
-impl Function for EqualProcessor {
-    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
+impl<T: Environment> Function<T> for EqualProcessor {
+    fn process(
+        &self,
+        args: &[Expression],
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
         if args.len() < 2 {
             return Err(LispComputerError::ArityMismatch(
-                self.name().to_string(),
+                <EqualProcessor as Function<T>>::name(self).to_string(),
                 2,
                 args.len(),
             ));
@@ -197,7 +234,7 @@ impl Function for EqualProcessor {
 
         let mut evaluated_args = Vec::new();
         for arg in args {
-            evaluated_args.push(arg.eval(env)?);
+            evaluated_args.push(arg.eval(env, variables)?);
         }
 
         for pair in evaluated_args.windows(2) {
@@ -214,11 +251,16 @@ impl Function for EqualProcessor {
 }
 
 pub struct GreaterThanProcessor;
-impl Function for GreaterThanProcessor {
-    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
+impl<T: Environment> Function<T> for GreaterThanProcessor {
+    fn process(
+        &self,
+        args: &[Expression],
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
         if args.len() < 2 {
             return Err(LispComputerError::ArityMismatch(
-                self.name().to_string(),
+                <GreaterThanProcessor as Function<T>>::name(self).to_string(),
                 2,
                 args.len(),
             ));
@@ -226,11 +268,11 @@ impl Function for GreaterThanProcessor {
 
         let mut evaluated_args = Vec::new();
         for arg in args {
-            match arg.eval(env)? {
+            match arg.eval(env, variables)? {
                 Value::Number(n) => evaluated_args.push(n),
                 other => {
                     return Err(LispComputerError::TypeMismatch1 {
-                        operation: self.name().to_string(),
+                        operation: <GreaterThanProcessor as Function<T>>::name(self).to_string(),
                         left: other,
                     });
                 }
@@ -253,22 +295,27 @@ impl Function for GreaterThanProcessor {
 
 pub struct LessThanProcessor;
 
-impl Function for LessThanProcessor {
-    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
+impl<T: Environment> Function<T> for LessThanProcessor {
+    fn process(
+        &self,
+        args: &[Expression],
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
         if args.len() < 2 {
             return Err(LispComputerError::InvalidArguments(
-                self.name().to_string(),
+                <LessThanProcessor as Function<T>>::name(self).to_string(),
                 args.to_vec(),
             ));
         }
 
         let mut evaluated_args = Vec::new();
         for arg in args {
-            match arg.eval(env)? {
+            match arg.eval(env, variables)? {
                 Value::Number(n) => evaluated_args.push(n),
                 other => {
                     return Err(LispComputerError::TypeMismatch1 {
-                        operation: self.name().to_string(),
+                        operation: <LessThanProcessor as Function<T>>::name(self).to_string(),
                         left: other,
                     });
                 }
@@ -291,22 +338,27 @@ impl Function for LessThanProcessor {
 
 pub struct GreaterEqualProcessor;
 
-impl Function for GreaterEqualProcessor {
-    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
+impl<T: Environment> Function<T> for GreaterEqualProcessor {
+    fn process(
+        &self,
+        args: &[Expression],
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
         if args.len() < 2 {
             return Err(LispComputerError::InvalidArguments(
-                self.name().to_string(),
+                <GreaterEqualProcessor as Function<T>>::name(self).to_string(),
                 args.to_vec(),
             ));
         }
         let mut evaluated_args = Vec::new();
 
         for arg in args {
-            match arg.eval(env)? {
+            match arg.eval(env, variables)? {
                 Value::Number(n) => evaluated_args.push(n),
                 other => {
                     return Err(LispComputerError::TypeMismatch1 {
-                        operation: self.name().to_string(),
+                        operation: <GreaterEqualProcessor as Function<T>>::name(self).to_string(),
                         left: other,
                     });
                 }
@@ -327,21 +379,26 @@ impl Function for GreaterEqualProcessor {
 
 pub struct LessEqualProcessor;
 
-impl Function for LessEqualProcessor {
-    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
+impl<T: Environment> Function<T> for LessEqualProcessor {
+    fn process(
+        &self,
+        args: &[Expression],
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
         if args.len() < 2 {
             return Err(LispComputerError::InvalidArguments(
-                self.name().to_string(),
+                <LessEqualProcessor as Function<T>>::name(self).to_string(),
                 args.to_vec(),
             ));
         }
         let mut evaluated_args = Vec::new();
         for arg in args {
-            match arg.eval(env)? {
+            match arg.eval(env, variables)? {
                 Value::Number(n) => evaluated_args.push(n),
                 other => {
                     return Err(LispComputerError::TypeMismatch1 {
-                        operation: self.name().to_string(),
+                        operation: <LessEqualProcessor as Function<T>>::name(self).to_string(),
                         left: other,
                     });
                 }
@@ -360,13 +417,147 @@ impl Function for LessEqualProcessor {
     }
 }
 
+pub struct IfProcessor;
+
+impl<T: Environment> Function<T> for IfProcessor {
+    fn process(
+        &self,
+        args: &[Expression],
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
+        match args {
+            [condition, then_branch, else_branch] => {
+                let condition = condition.eval(env, variables)?.boolean();
+                match condition {
+                    true => then_branch.eval(env, variables),
+                    false => else_branch.eval(env, variables),
+                }
+            }
+            _ => Err(LispComputerError::ArityMismatch(
+                <IfProcessor as Function<T>>::name(self).to_string(),
+                3,
+                args.len(),
+            )),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "if"
+    }
+}
+
+pub struct OrProcessor;
+
+impl<T: Environment> Function<T> for OrProcessor {
+    fn process(
+        &self,
+        args: &[Expression],
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
+        let mut last_value = Value::Boolean(false);
+
+        for arg in args {
+            let value = arg.eval(env, variables)?;
+            if value.boolean() {
+                return Ok(value);
+            }
+            last_value = value;
+        }
+
+        Ok(last_value)
+    }
+
+    fn name(&self) -> &str {
+        "or"
+    }
+}
+
+pub struct AndProcessor;
+
+impl<T: Environment> Function<T> for AndProcessor {
+    fn process(
+        &self,
+        args: &[Expression],
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
+        let mut last_value = Value::Boolean(true);
+
+        for arg in args {
+            let value = arg.eval(env, variables)?;
+            if !value.boolean() {
+                return Ok(value);
+            }
+            last_value = value;
+        }
+
+        Ok(last_value)
+    }
+
+    fn name(&self) -> &str {
+        "and"
+    }
+}
+
+pub struct CondProcessor;
+
+impl<T: Environment> Function<T> for CondProcessor {
+    fn process(
+        &self,
+        args: &[Expression],
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
+        for arg in args {
+            match arg {
+                Expression::List(inner_args) => match inner_args.as_slice() {
+                    [Expression::Variable(name), result] if name == "else" => {
+                        return result.eval(env, variables);
+                    }
+                    [condition, result] => {
+                        let condition_value = condition.eval(env, variables)?;
+                        if condition_value.boolean() {
+                            return result.eval(env, variables);
+                        }
+                    }
+                    _ => {
+                        return Err(LispComputerError::InvalidArguments(
+                            <CondProcessor as Function<T>>::name(self).to_string(),
+                            args.to_vec(),
+                        ));
+                    }
+                },
+                _ => {
+                    return Err(LispComputerError::InvalidArguments(
+                        <CondProcessor as Function<T>>::name(self).to_string(),
+                        args.to_vec(),
+                    ));
+                }
+            }
+        }
+
+        Ok(Value::Boolean(false))
+    }
+
+    fn name(&self) -> &str {
+        "cond"
+    }
+}
+
 pub struct DefineProcessor;
 
-impl Function for DefineProcessor {
-    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
+impl<T: Environment> Function<T> for DefineProcessor {
+    fn process(
+        &self,
+        args: &[Expression],
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
         match args {
             [Expression::Variable(name), value] => {
-                let value = value.eval(env)?;
+                let value = value.eval(env, variables)?;
                 env.set_variable(name.to_string(), value);
                 Ok(Value::Nil)
             }
@@ -387,12 +578,12 @@ impl Function for DefineProcessor {
                     Ok(Value::Nil)
                 }
                 _ => Err(LispComputerError::InvalidArguments(
-                    self.name().to_string(),
+                    <DefineProcessor as Function<T>>::name(self).to_string(),
                     args.to_vec(),
                 )),
             },
             _ => Err(LispComputerError::InvalidArguments(
-                self.name().to_string(),
+                <DefineProcessor as Function<T>>::name(self).to_string(),
                 args.to_vec(),
             )),
         }
@@ -403,118 +594,14 @@ impl Function for DefineProcessor {
     }
 }
 
-pub struct IfProcessor;
-
-impl Function for IfProcessor {
-    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
-        match args {
-            [condition, then_branch, else_branch] => {
-                let condition = condition.eval(env)?.boolean();
-                match condition {
-                    true => then_branch.eval(env),
-                    false => else_branch.eval(env),
-                }
-            }
-            _ => Err(LispComputerError::ArityMismatch(
-                self.name().to_string(),
-                3,
-                args.len(),
-            )),
-        }
-    }
-
-    fn name(&self) -> &str {
-        "if"
-    }
-}
-
-pub struct OrProcessor;
-
-impl Function for OrProcessor {
-    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
-        let mut last_value = Value::Boolean(false);
-
-        for arg in args {
-            let value = arg.eval(env)?;
-            if value.boolean() {
-                return Ok(value);
-            }
-            last_value = value;
-        }
-
-        Ok(last_value)
-    }
-
-    fn name(&self) -> &str {
-        "or"
-    }
-}
-
-pub struct AndProcessor;
-
-impl Function for AndProcessor {
-    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
-        let mut last_value = Value::Boolean(true);
-
-        for arg in args {
-            let value = arg.eval(env)?;
-            if !value.boolean() {
-                return Ok(value);
-            }
-            last_value = value;
-        }
-
-        Ok(last_value)
-    }
-
-    fn name(&self) -> &str {
-        "and"
-    }
-}
-
-pub struct CondProcessor;
-
-impl Function for CondProcessor {
-    fn process(&self, args: &[Expression], env: &Environment) -> Result<Value, LispComputerError> {
-        for arg in args {
-            match arg {
-                Expression::List(inner_args) => match inner_args.as_slice() {
-                    [Expression::Variable(name), result] if name == "else" => {
-                        return result.eval(env);
-                    }
-                    [condition, result] => {
-                        let condition_value = condition.eval(env)?;
-                        if condition_value.boolean() {
-                            return result.eval(env);
-                        }
-                    }
-                    _ => {
-                        return Err(LispComputerError::InvalidArguments(
-                            self.name().to_string(),
-                            args.to_vec(),
-                        ));
-                    }
-                },
-                _ => {
-                    return Err(LispComputerError::InvalidArguments(
-                        self.name().to_string(),
-                        args.to_vec(),
-                    ));
-                }
-            }
-        }
-
-        Ok(Value::Boolean(false))
-    }
-
-    fn name(&self) -> &str {
-        "cond"
-    }
-}
-
 pub struct LambdaProcessor;
-impl Function for LambdaProcessor {
-    fn process(&self, args: &[Expression], _env: &Environment) -> Result<Value, LispComputerError> {
+impl<T: Environment> Function<T> for LambdaProcessor {
+    fn process(
+        &self,
+        args: &[Expression],
+        _env: &T,
+        _variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
         match args {
             [Expression::List(params), Expression::List(body)] => {
                 let params = params
@@ -533,7 +620,7 @@ impl Function for LambdaProcessor {
                 Ok(Value::Lambda(Lambda::new(params, body)))
             }
             _ => Err(LispComputerError::InvalidArguments(
-                self.name().to_string(),
+                <LambdaProcessor as Function<T>>::name(self).to_string(),
                 args.to_vec(),
             )),
         }

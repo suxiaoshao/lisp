@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use nom::{
     IResult, Parser,
     branch::alt,
@@ -26,13 +28,17 @@ pub enum Expression {
 }
 
 impl Expression {
-    pub fn eval(&self, env: &Environment) -> Result<Value, LispComputerError> {
+    pub fn eval<T: Environment>(
+        &self,
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
         match self {
             Expression::Number(data) => Ok(Value::Number(*data)),
             Expression::Variable(value) => env
-                .get_variable(value)
+                .get_variable(value, variables)
                 .ok_or(LispComputerError::NotFoundVariable(value.to_string())),
-            Expression::List(expressions) => process_expression_list(expressions, env),
+            Expression::List(expressions) => process_expression_list(expressions, env, variables),
             Expression::String(string) => Ok(Value::String(string.to_string())),
         }
     }
