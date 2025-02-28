@@ -16,15 +16,15 @@ pub enum LispError {
 pub enum LispComputerError {
     #[error("Unbound function:{}",.0)]
     UnboundFunction(String),
-    #[error("Operation {} mismatch: left {:?}, right {:?}",.operation,.left,.right)]
+    #[error("Operation {} mismatch: left {}, right {}",.operation,.left,.right)]
     TypeMismatch2 {
         operation: String,
         left: Value,
         right: Value,
     },
-    #[error("Operation {} mismatch: get {:?}",.operation,.left)]
+    #[error("Operation {} mismatch: get {}",.operation,.left)]
     TypeMismatch1 { operation: String, left: Value },
-    #[error("Invalid arguments for function {}: {:?}",.0,.1)]
+    #[error("Invalid arguments for function {}: {}",.0,.1.iter().map(|e| format!("{}", e)).collect::<Vec<String>>().join(" "))]
     InvalidArguments(String, Vec<Expression>),
     #[error("Variable not found: {}",.0)]
     NotFoundVariable(String),

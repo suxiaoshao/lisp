@@ -24,11 +24,15 @@ fn main() -> Result<(), LispError> {
                 let (_, expression) =
                     parse_expression(&line).map_err(|_| LispError::InvalidInput)?;
 
-                println!("{expression:?}");
+                println!("{expression}");
 
-                let result = expression.eval(&env, &HashMap::new())?;
+                let result = expression.eval(&env, &HashMap::new());
 
-                println!("Result: {:?}", result);
+                match result {
+                    Ok(data) => println!("Result: {}", data),
+                    Err(err) => println!("Error:{err}"),
+                }
+
                 if line.trim() == "exit" {
                     break;
                 }
@@ -42,7 +46,7 @@ fn main() -> Result<(), LispError> {
                 break;
             }
             Err(err) => {
-                println!("Error: {:?}", err);
+                println!("Error: {}", err);
                 break;
             }
         }

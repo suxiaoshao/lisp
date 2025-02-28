@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 
 use nom::{
     IResult, Parser,
@@ -26,6 +26,34 @@ pub enum Expression {
     List(Vec<Expression>),
     String(String),
     NamingList(String, Vec<Expression>),
+}
+
+impl Display for Expression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Expression::Number(number) => write!(f, "{}", number),
+            Expression::Variable(name) => write!(f, "{}", name),
+            Expression::List(expressions) => write!(
+                f,
+                "({})",
+                expressions
+                    .iter()
+                    .map(|e| format!("{}", e))
+                    .collect::<Vec<String>>()
+                    .join(" ")
+            ),
+            Expression::String(string) => write!(f, "\"{}\"", string),
+            Expression::NamingList(name, expressions) => write!(
+                f,
+                "{name}({})",
+                expressions
+                    .iter()
+                    .map(|e| format!("{}", e))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
+        }
+    }
 }
 
 impl Expression {

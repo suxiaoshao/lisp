@@ -697,3 +697,93 @@ impl<T: Environment> Function<T> for LetProcessor {
         "let"
     }
 }
+
+pub struct DoProcessor;
+
+impl<T> Function<T> for DoProcessor
+where
+    T: Environment,
+{
+    fn process(
+        &self,
+        args: &[Expression],
+        env: &T,
+        variables: &HashMap<&str, Value>,
+    ) -> Result<Value, LispComputerError> {
+        struct DoStep<'a> {
+            name: &'a str,
+            step_expr: &'a Expression,
+        }
+        struct DoTest<'a> {
+            test_expr: &'a Expression,
+            result_expr: &'a Expression,
+        }
+        match args {
+            [
+                Expression::List(bindings),
+                Expression::List(test),
+                bodys @ ..,
+            ] => {
+                let mut new_variables = variables.clone();
+                let mut steps = Vec::new();
+                for binding in bindings {
+                    match binding {
+                        Expression::List(list) => {
+                            if let [Expression::Variable(name), value, step_expr] = list.as_slice()
+                            {
+                                new_variables.insert(name, value.eval(env, variables)?);
+                                steps.push(DoStep { name, step_expr });
+                            } else {
+                                return Err(LispComputerError::InvalidArguments(
+                                    <Self as Function<T>>::name(self).to_string(),
+                                    args.to_vec(),
+                                ));
+                            }
+                        }
+                        _ => {
+                            return Err(LispComputerError::InvalidArguments(
+                                <Self as Function<T>>::name(self).to_string(),
+                                args.to_vec(),
+                            ));
+                        }
+                    }
+                }
+                let do_test = match test.as_slice() {
+                    [test_expr, result_expr] => DoTest {
+                        test_expr,
+                        result_expr,
+                    },
+                    _ => {
+                        return Err(LispComputerError::InvalidArguments(
+                            <Self as Function<T>>::name(self).to_string(),
+                            args.to_vec(),
+                        ));
+                    }
+                };
+                loop {
+                    if do_test.test_expr.eval(env, &new_variables)?.boolean() {
+                        return do_test.result_expr.eval(env, &new_variables);
+                    }
+                    for body in bodys {
+                        body.eval(env, &new_variables)?;
+                    }
+                    let values = steps
+                        .iter()
+                        .map::<Result<_, LispComputerError>, _>(|step| {
+                            let new_value = step.step_expr.eval(env, &new_variables)?;
+                            Ok((step.name, new_value))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    new_variables.extend(values);
+                }
+            }
+            _ => Err(LispComputerError::InvalidArguments(
+                <Self as Function<T>>::name(self).to_string(),
+                args.to_vec(),
+            )),
+        }
+    }
+    fn name(&self) -> &str {
+        "do"
+    }
+}

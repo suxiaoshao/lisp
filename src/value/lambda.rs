@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 
 use crate::{
     environment::Environment,
@@ -13,6 +13,16 @@ use super::Value;
 pub struct Lambda {
     params: Vec<String>,
     body: Vec<Expression>,
+}
+
+impl Display for Lambda {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(lambda ({})(", self.params.join(" "))?;
+        for expr in &self.body {
+            write!(f, " {}", expr)?;
+        }
+        write!(f, "))")
+    }
 }
 
 impl Lambda {

@@ -5,8 +5,8 @@ use crate::{
     parse::Expression,
     process::{
         AdditionProcessor, AndProcessor, CondProcessor, DefineProcessor, DivisionProcessor,
-        EqualProcessor, Function, GreaterEqualProcessor, GreaterThanProcessor, IfProcessor,
-        LambdaProcessor, LessEqualProcessor, LessThanProcessor, LetProcessor,
+        DoProcessor, EqualProcessor, Function, GreaterEqualProcessor, GreaterThanProcessor,
+        IfProcessor, LambdaProcessor, LessEqualProcessor, LessThanProcessor, LetProcessor,
         MultiplicationProcessor, OrProcessor, SubtractionProcessor,
     },
     value::Value,
@@ -136,6 +136,10 @@ impl GlobalEnvironment {
         functions.insert(
             <LetProcessor as Function<T>>::name(&LetProcessor).to_string(),
             Box::new(LetProcessor),
+        );
+        functions.insert(
+            <DoProcessor as Function<T>>::name(&DoProcessor).to_string(),
+            Box::new(DoProcessor),
         );
         functions
     }
