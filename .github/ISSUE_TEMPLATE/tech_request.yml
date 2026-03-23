@@ -1,0 +1,31 @@
+name: Technical task
+description: Track refactors, CI work, docs, test coverage, or maintenance
+title: "[Tech] "
+labels:
+  - chore
+body:
+  - type: textarea
+    id: background
+    attributes:
+      label: Background
+      description: What technical problem or maintenance need should be addressed?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What files, systems, or workflows are expected to change?
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Definition of done
+      description: What conditions must be satisfied before this task is complete?
+      placeholder: |
+        - Templates added
+        - CI passes
+        - Documentation updated
+    validations:
+      required: true

@@ -1,19 +1,30 @@
 use std::collections::HashMap;
 
 use errors::LispError;
+use gc_arena::Gc;
+use gc_arena::lock::RefLock;
+use rustyline::{DefaultEditor, error::ReadlineError};
 
 mod environment;
 mod errors;
 mod parse;
 mod process;
+mod root;
 mod value;
 
-use parse::parse_expression;
-use rustyline::{DefaultEditor, error::ReadlineError};
+#[cfg(test)]
+mod test_utils;
 
 fn main() -> Result<(), LispError> {
     let mut rl = DefaultEditor::new()?;
-    let env = environment::GlobalEnvironment::default();
+    let arena = root::GcArena::new(|mc| {
+        let mut vars = HashMap::new();
+        vars.insert("#f".to_string(), value::Value::Boolean(false));
+        vars.insert("#t".to_string(), value::Value::Boolean(true));
+        root::LispRoot {
+            variables: Gc::new(mc, RefLock::new(vars)),
+        }
+    });
 
     loop {
         let readline = rl.readline(">> ");
@@ -21,12 +32,16 @@ fn main() -> Result<(), LispError> {
             Ok(line) => {
                 rl.add_history_entry(line.as_str())?;
 
-                let (_, expression) =
-                    parse_expression(&line).map_err(|_| LispError::InvalidInput)?;
-
-                println!("{expression}");
-
-                let result = expression.eval(&env, &HashMap::new());
+                let result: Result<String, LispError> = arena.mutate(|mc, root| {
+                    let (_, expression) = crate::parse::parse_expression(mc, &line)
+                        .map_err(|_| LispError::InvalidInput)?;
+                    println!("{expression}");
+                    let vars = HashMap::new();
+                    let value = expression
+                        .eval(root, &vars, mc)
+                        .map_err(LispError::ComputerError)?;
+                    Ok(format!("{}", value))
+                });
 
                 match result {
                     Ok(data) => println!("Result: {}", data),
