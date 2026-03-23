@@ -58,10 +58,10 @@ impl<'gc> Environment<'gc> for LispRoot<'gc> {
         name: &str,
         variables: &HashMap<String, Value<'gc>>,
     ) -> Option<Value<'gc>> {
-        if let Some(value) = self.variables.borrow().get(name).cloned() {
+        if let Some(value) = variables.get(name).cloned() {
             Some(value)
         } else {
-            variables.get(name).cloned()
+            self.variables.borrow().get(name).cloned()
         }
     }
 

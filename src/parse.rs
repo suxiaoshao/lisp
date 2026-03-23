@@ -6,9 +6,10 @@ use crate::{
     environment::Environment, errors::LispComputerError, process::process_expression_list,
     value::Value,
 };
-use gc_arena::{lock::RefLock, Gc, Mutation};
+use gc_arena::{Gc, Mutation};
 use gc_arena_derive::Collect;
 use nom::{
+    IResult, Parser,
     branch::alt,
     bytes::complete::tag,
     character::complete::{multispace0, multispace1, none_of, one_of},
@@ -17,7 +18,6 @@ use nom::{
     multi::{many1, separated_list0},
     number::complete::double,
     sequence::delimited,
-    IResult, Parser,
 };
 
 #[derive(Debug, PartialEq, Clone, Collect)]
@@ -73,7 +73,7 @@ impl<'gc> Expression<'gc> {
             Expression::List(expressions) => {
                 process_expression_list(expressions, env, variables, mc)
             }
-            Expression::String(s) => Ok(Value::String(s.clone())),
+            Expression::String(s) => Ok(Value::String(*s)),
             Expression::NamingList(_, _) => Err(LispComputerError::LetNamingNotReturn),
         }
     }
@@ -134,19 +134,19 @@ mod test {
     use super::*;
     use crate::{errors::LispComputerError, root::GcArena};
     use anyhow::Result;
-    use gc_arena::lock::RefLock;
     use gc_arena::Gc;
+    use gc_arena::lock::RefLock;
     use std::collections::HashMap;
 
     #[test]
     fn parse_expression_inner_test() -> Result<()> {
-        let mut arena = GcArena::new(|mc| crate::root::LispRoot {
+        let arena = GcArena::new(|mc| crate::root::LispRoot {
             variables: Gc::new(mc, RefLock::new(HashMap::new())),
         });
         arena.mutate(|mc, _root| -> Result<(), LispComputerError> {
             let input = "1 1";
-            let (remaining, exprs) =
-                parse_expression_inner(mc, input).map_err(|_| LispComputerError::InvalidInput)?;
+            let (remaining, exprs) = parse_expression_inner(mc, input)
+                .map_err(|_| LispComputerError::InvalidExpression("parse error".to_string()))?;
             assert_eq!(remaining, "");
             assert_eq!(exprs.len(), 2);
             assert_eq!(&*exprs[0], &Expression::Number(1.0));
@@ -158,13 +158,13 @@ mod test {
 
     #[test]
     fn parse_expression_test() -> Result<()> {
-        let mut arena = GcArena::new(|mc| crate::root::LispRoot {
+        let arena = GcArena::new(|mc| crate::root::LispRoot {
             variables: Gc::new(mc, RefLock::new(HashMap::new())),
         });
         arena.mutate(|mc, _root| -> Result<(), LispComputerError> {
             let input = "(+ 1 1)";
-            let (remaining, expr) =
-                parse_expression(mc, input).map_err(|_| LispComputerError::InvalidInput)?;
+            let (remaining, expr) = parse_expression(mc, input)
+                .map_err(|_| LispComputerError::InvalidExpression("parse error".to_string()))?;
             assert_eq!(remaining, "");
             let expected = Expression::List(vec![
                 Gc::new(mc, Expression::Variable("+".to_string())),
@@ -174,8 +174,8 @@ mod test {
             assert_eq!(&*expr, &expected);
 
             let input = "(+ 1 (* 2 3 (/ 3 1)))";
-            let (remaining, expr) =
-                parse_expression(mc, input).map_err(|_| LispComputerError::InvalidInput)?;
+            let (remaining, expr) = parse_expression(mc, input)
+                .map_err(|_| LispComputerError::InvalidExpression("parse error".to_string()))?;
             assert_eq!(remaining, "");
             let expected = Expression::List(vec![
                 Gc::new(mc, Expression::Variable("+".to_string())),
@@ -201,15 +201,15 @@ mod test {
 
             // test string
             let input = "\"hello\"";
-            let (remaining, expr) =
-                parse_expression(mc, input).map_err(|_| LispComputerError::InvalidInput)?;
+            let (remaining, expr) = parse_expression(mc, input)
+                .map_err(|_| LispComputerError::InvalidExpression("parse error".to_string()))?;
             assert_eq!(remaining, "");
             let expected = Expression::String(Gc::new(mc, "hello".to_string()));
             assert_eq!(&*expr, &expected);
 
             let input = r#""line\nquote\"unicode\u{2764}""#;
-            let (remaining, expr) =
-                parse_expression(mc, input).map_err(|_| LispComputerError::InvalidInput)?;
+            let (remaining, expr) = parse_expression(mc, input)
+                .map_err(|_| LispComputerError::InvalidExpression("parse error".to_string()))?;
             assert_eq!(remaining, "");
             let expected = Expression::String(Gc::new(mc, "line\nquote\"unicode❤".to_string()));
             assert_eq!(&*expr, &expected);

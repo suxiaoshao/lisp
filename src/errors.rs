@@ -12,8 +12,6 @@ pub enum LispError {
 
 #[derive(Debug, PartialEq, thiserror::Error)]
 pub enum LispComputerError {
-    #[error("Invalid input")]
-    InvalidInput,
     #[error("Unbound function:{}",.0)]
     UnboundFunction(String),
     #[error("Operation {} mismatch: left {}, right {}",.operation,.left_str,.right_str)]
@@ -24,7 +22,7 @@ pub enum LispComputerError {
     },
     #[error("Operation {} mismatch: get {}",.operation,.left_str)]
     TypeMismatch1 { operation: String, left_str: String },
-    #[error("Invalid arguments for function {}: {}",.0,.1.iter().map(|e| format!("{}", e)).collect::<Vec<String>>().join(" "))]
+    #[error("Invalid arguments for function {}: {}",.0,.1.iter().map(|e| e.to_string()).collect::<Vec<String>>().join(" "))]
     InvalidArguments(String, Vec<String>),
     #[error("Variable not found: {}",.0)]
     NotFoundVariable(String),

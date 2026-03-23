@@ -1,5 +1,4 @@
-use crate::{errors::LispComputerError, parse::parse_expression, root::GcArena, value::Value};
-use gc_arena::lock::RefLock;
+use crate::{errors::LispComputerError, parse::parse_expression, root::GcArena};
 use std::collections::HashMap;
 
 /// Evaluate a string expression in the given arena and return its display string.

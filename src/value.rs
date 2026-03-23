@@ -42,13 +42,13 @@ impl<'gc> Value<'gc> {
 mod tests {
     use super::*;
     use crate::{errors::LispComputerError, root::GcArena};
-    use gc_arena::lock::RefLock;
     use gc_arena::Gc;
+    use gc_arena::lock::RefLock;
     use std::collections::HashMap;
 
     #[test]
     fn test_value_display() {
-        let mut arena = GcArena::new(|mc| crate::root::LispRoot {
+        let arena = GcArena::new(|mc| crate::root::LispRoot {
             variables: Gc::new(mc, RefLock::new(HashMap::new())),
         });
         arena
@@ -70,7 +70,7 @@ mod tests {
         assert!(!Value::Boolean(false).boolean());
         assert!(!Value::Nil.boolean());
         assert!(Value::Number(0.0).boolean());
-        let mut arena = GcArena::new(|mc| crate::root::LispRoot {
+        let arena = GcArena::new(|mc| crate::root::LispRoot {
             variables: Gc::new(mc, RefLock::new(HashMap::new())),
         });
         arena

@@ -17,7 +17,7 @@ pub trait Environment<'gc> {
         name: &str,
         variables: &HashMap<String, Value<'gc>>,
     ) -> Option<Value<'gc>>;
-    fn is_builtin(&self, name: &str) -> bool {
+    fn is_builtin(&self, _name: &str) -> bool {
         false
     }
 }

@@ -1,12 +1,9 @@
-#[macro_use]
-extern crate gc_arena_derive;
-
 use std::collections::HashMap;
 
 use errors::LispError;
-use gc_arena::lock::RefLock;
 use gc_arena::Gc;
-use rustyline::{error::ReadlineError, DefaultEditor};
+use gc_arena::lock::RefLock;
+use rustyline::{DefaultEditor, error::ReadlineError};
 
 mod environment;
 mod errors;
@@ -20,7 +17,7 @@ mod test_utils;
 
 fn main() -> Result<(), LispError> {
     let mut rl = DefaultEditor::new()?;
-    let mut arena = root::GcArena::new(|mc| {
+    let arena = root::GcArena::new(|mc| {
         let mut vars = HashMap::new();
         vars.insert("#f".to_string(), value::Value::Boolean(false));
         vars.insert("#t".to_string(), value::Value::Boolean(true));

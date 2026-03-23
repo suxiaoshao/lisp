@@ -6,7 +6,7 @@ use crate::{
     parse::Expression,
     value::{Lambda, Value},
 };
-use gc_arena::{lock::RefLock, Gc, Mutation};
+use gc_arena::{Gc, Mutation};
 
 pub trait Function<'gc, T: Environment<'gc>> {
     fn process(
@@ -28,9 +28,7 @@ pub fn process_expression_list<'gc, T: Environment<'gc>>(
     match expressions {
         [] => Ok(Value::Nil),
         [callee, tail @ ..] => match &**callee {
-            Expression::Variable(name) => {
-                return env.process_variable(name, tail, variables, mc);
-            }
+            Expression::Variable(name) => env.process_variable(name, tail, variables, mc),
             Expression::List(_) => {
                 let callee_value = callee.eval(env, variables, mc)?;
                 if let Value::Lambda(func) = callee_value {
@@ -545,23 +543,21 @@ impl<'gc, T: Environment<'gc>> Function<'gc, T> for CondProcessor {
     ) -> Result<Value<'gc>, LispComputerError> {
         if let Some((last, args)) = args.split_last() {
             for arg in args {
-                if let Expression::List(inner_args) = &**arg {
-                    if let [condition, result] = inner_args.as_slice() {
-                        let condition_value = condition.eval(env, variables, mc)?;
-                        if condition_value.boolean() {
-                            return result.eval(env, variables, mc);
-                        }
+                if let Expression::List(inner_args) = &**arg
+                    && let [condition, result] = inner_args.as_slice()
+                {
+                    let condition_value = condition.eval(env, variables, mc)?;
+                    if condition_value.boolean() {
+                        return result.eval(env, variables, mc);
                     }
                 }
             }
-            if let Expression::List(inner_args) = &**last {
-                if let [var_gc, result_gc] = inner_args.as_slice() {
-                    if let Expression::Variable(name) = &**var_gc {
-                        if name == "else" {
-                            return result_gc.eval(env, variables, mc);
-                        }
-                    }
-                }
+            if let Expression::List(inner_args) = &**last
+                && let [var_gc, result_gc] = inner_args.as_slice()
+                && let Expression::Variable(name) = &**var_gc
+                && name == "else"
+            {
+                return result_gc.eval(env, variables, mc);
             }
         }
         Err(LispComputerError::InvalidArguments(
@@ -611,7 +607,7 @@ impl<'gc, T: Environment<'gc>> Function<'gc, T> for DefineProcessor {
                                         params_vec.iter().cloned().collect();
                                     let mut free = HashSet::new();
                                     for expr in body {
-                                        Lambda::collect_free_vars(&**expr, &bound, &mut free);
+                                        Lambda::collect_free_vars(expr, &bound, &mut free);
                                     }
                                     let mut captured: HashMap<String, Value<'gc>> = HashMap::new();
                                     for name in &free {
@@ -700,7 +696,7 @@ impl<'gc, T: Environment<'gc>> Function<'gc, T> for LambdaProcessor {
                     param_names.iter().cloned().collect();
                 let mut free = std::collections::HashSet::new();
                 for expr in rest {
-                    Lambda::collect_free_vars(&**expr, &bound, &mut free);
+                    Lambda::collect_free_vars(expr, &bound, &mut free);
                 }
 
                 // Capture free variables from the current environment (excluding builtins)
@@ -755,6 +751,7 @@ impl<'gc, T: Environment<'gc>> Function<'gc, T> for LetProcessor {
             env: &U,
             variables: &HashMap<String, Value<'gc>>,
             mc: &'gc Mutation<'gc>,
+            recursive_name: Option<&str>,
             bindings: &[Gc<'gc, Expression<'gc>>],
             body: &[Gc<'gc, Expression<'gc>>],
         ) -> Result<(Gc<'gc, Lambda<'gc>>, Vec<Gc<'gc, Expression<'gc>>>), LispComputerError>
@@ -767,7 +764,7 @@ impl<'gc, T: Environment<'gc>> Function<'gc, T> for LetProcessor {
                         [var, value] => {
                             if let Expression::Variable(name) = &**var {
                                 params.push(name.to_string());
-                                lambda_args.push(value.clone());
+                                lambda_args.push(*value);
                             } else {
                                 return Err(LispComputerError::InvalidArguments(
                                     "let-bindings".to_string(),
@@ -792,10 +789,13 @@ impl<'gc, T: Environment<'gc>> Function<'gc, T> for LetProcessor {
             }
 
             // Compute free variables and capture environment
-            let bound: HashSet<String> = params.iter().cloned().collect();
+            let mut bound: HashSet<String> = params.iter().cloned().collect();
+            if let Some(name) = recursive_name {
+                bound.insert(name.to_string());
+            }
             let mut free = HashSet::new();
             for expr in body {
-                Lambda::collect_free_vars(&**expr, &bound, &mut free);
+                Lambda::collect_free_vars(expr, &bound, &mut free);
             }
             let mut captured: HashMap<String, Value<'gc>> = HashMap::new();
             for name in &free {
@@ -828,15 +828,15 @@ impl<'gc, T: Environment<'gc>> Function<'gc, T> for LetProcessor {
                         ));
                     }
                     let (lambda, lambda_args) =
-                        get_lambda_from(env, variables, mc, bindings, rest)?;
+                        get_lambda_from(env, variables, mc, Some(name), bindings, rest)?;
                     let mut new_vars = variables.clone();
-                    new_vars.insert(name.to_string(), Value::Lambda(lambda.clone()));
-                    return lambda.process(&lambda_args, env, &new_vars, mc);
+                    new_vars.insert(name.to_string(), Value::Lambda(lambda));
+                    lambda.process(&lambda_args, env, &new_vars, mc)
                 } else {
-                    return Err(LispComputerError::InvalidArguments(
+                    Err(LispComputerError::InvalidArguments(
                         <Self as Function<'gc, T>>::name(self).to_string(),
                         args.iter().map(|e| format!("{}", e)).collect(),
-                    ));
+                    ))
                 }
             }
             // let: (let ((var val) ...) body...)
@@ -849,21 +849,19 @@ impl<'gc, T: Environment<'gc>> Function<'gc, T> for LetProcessor {
                         ));
                     }
                     let (lambda, lambda_args) =
-                        get_lambda_from(env, variables, mc, bindings, rest)?;
-                    return lambda.process(&lambda_args, env, variables, mc);
+                        get_lambda_from(env, variables, mc, None, bindings, rest)?;
+                    lambda.process(&lambda_args, env, variables, mc)
                 } else {
-                    return Err(LispComputerError::InvalidArguments(
+                    Err(LispComputerError::InvalidArguments(
                         <Self as Function<'gc, T>>::name(self).to_string(),
                         args.iter().map(|e| format!("{}", e)).collect(),
-                    ));
+                    ))
                 }
             }
-            _ => {
-                return Err(LispComputerError::InvalidArguments(
-                    <Self as Function<'gc, T>>::name(self).to_string(),
-                    args.iter().map(|e| format!("{}", e)).collect(),
-                ))
-            }
+            _ => Err(LispComputerError::InvalidArguments(
+                <Self as Function<'gc, T>>::name(self).to_string(),
+                args.iter().map(|e| format!("{}", e)).collect(),
+            )),
         }
     }
 
@@ -896,7 +894,7 @@ impl<'gc, T: Environment<'gc>> Function<'gc, T> for DoProcessor {
                                     if let Expression::Variable(name) = &**var_gc {
                                         let evaluated = value_gc.eval(env, variables, mc)?;
                                         new_variables.insert(name.clone(), evaluated);
-                                        steps.push((name.clone(), step_expr_gc.clone()));
+                                        steps.push((name.clone(), *step_expr_gc));
                                     } else {
                                         return Err(LispComputerError::InvalidArguments(
                                             <Self as Function<'gc, T>>::name(self).to_string(),
@@ -920,7 +918,7 @@ impl<'gc, T: Environment<'gc>> Function<'gc, T> for DoProcessor {
                         }
                     }
                     let (test_expr, result_expr) = match test.as_slice() {
-                        [test, result] => (test.clone(), result.clone()),
+                        [test, result] => (*test, *result),
                         _ => {
                             return Err(LispComputerError::InvalidArguments(
                                 <Self as Function<'gc, T>>::name(self).to_string(),
@@ -964,6 +962,7 @@ mod tests {
     use super::*;
     use crate::test_utils;
     use gc_arena::Gc;
+    use gc_arena::lock::RefLock;
     use std::collections::HashMap;
 
     fn eval(input: &str) -> Result<String, LispComputerError> {
@@ -1132,6 +1131,53 @@ mod tests {
     }
 
     #[test]
+    fn test_closure_capture_survives_global_redefinition() {
+        let mut arena = new_arena();
+
+        assert_eq!(
+            test_utils::eval_str("(define x 2)", &mut arena),
+            Ok("nil".to_string())
+        );
+        assert_eq!(
+            test_utils::eval_str("(define add-x (lambda (y) (+ x y)))", &mut arena),
+            Ok("nil".to_string())
+        );
+        assert_eq!(
+            test_utils::eval_str("(define x 100)", &mut arena),
+            Ok("nil".to_string())
+        );
+
+        assert_eq!(
+            test_utils::eval_str("(add-x 3)", &mut arena),
+            Ok("5".to_string())
+        );
+    }
+
+    #[test]
+    fn test_lambda_parameter_shadows_captured_variable() {
+        assert_eq!(
+            eval("(((lambda (x) (lambda (x) (+ x 1))) 2) 41)"),
+            Ok("42".to_string())
+        );
+    }
+
+    #[test]
+    fn test_lambda_captures_outer_variable_used_in_let_initializer() {
+        assert_eq!(
+            eval("(((lambda (x) (lambda () (let ((y x)) y))) 7))"),
+            Ok("7".to_string())
+        );
+    }
+
+    #[test]
+    fn test_named_let_recursion_keeps_outer_lexical_capture() {
+        assert_eq!(
+            eval("(let ((x 10)) (let loop ((n 2)) (if (= n 0) x (loop (- n 1)))))"),
+            Ok("10".to_string())
+        );
+    }
+
+    #[test]
     fn test_gc_preserves_global_values_across_mutations() {
         let mut arena = new_arena();
 
@@ -1168,7 +1214,10 @@ mod tests {
             assert!(test_utils::eval_str(&expr, &mut arena).is_ok());
         }
 
-        assert_eq!(test_utils::eval_str("(add-base 2)", &mut arena), Ok("42".to_string()));
+        assert_eq!(
+            test_utils::eval_str("(add-base 2)", &mut arena),
+            Ok("42".to_string())
+        );
     }
 
     #[test]
