@@ -1,7 +1,5 @@
 use rustyline::error::ReadlineError;
 
-use crate::{parse::Expression, value::Value};
-
 #[derive(thiserror::Error, Debug)]
 pub enum LispError {
     #[error("Invalid input")]
@@ -14,18 +12,20 @@ pub enum LispError {
 
 #[derive(Debug, PartialEq, thiserror::Error)]
 pub enum LispComputerError {
+    #[error("Invalid input")]
+    InvalidInput,
     #[error("Unbound function:{}",.0)]
     UnboundFunction(String),
-    #[error("Operation {} mismatch: left {}, right {}",.operation,.left,.right)]
+    #[error("Operation {} mismatch: left {}, right {}",.operation,.left_str,.right_str)]
     TypeMismatch2 {
         operation: String,
-        left: Value,
-        right: Value,
+        left_str: String,
+        right_str: String,
     },
-    #[error("Operation {} mismatch: get {}",.operation,.left)]
-    TypeMismatch1 { operation: String, left: Value },
+    #[error("Operation {} mismatch: get {}",.operation,.left_str)]
+    TypeMismatch1 { operation: String, left_str: String },
     #[error("Invalid arguments for function {}: {}",.0,.1.iter().map(|e| format!("{}", e)).collect::<Vec<String>>().join(" "))]
-    InvalidArguments(String, Vec<Expression>),
+    InvalidArguments(String, Vec<String>),
     #[error("Variable not found: {}",.0)]
     NotFoundVariable(String),
     #[error("Arity mismatch {}: expected {}, got {}",.0,.1,.2)]
@@ -39,6 +39,7 @@ pub enum LispComputerError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::value::Value;
 
     #[test]
     fn test_error_display() {
@@ -47,7 +48,7 @@ mod tests {
 
         let err = LispComputerError::TypeMismatch1 {
             operation: "+".to_string(),
-            left: Value::Number(1.0),
+            left_str: Value::Number(1.0).to_string(),
         };
         assert!(format!("{}", err).contains("Operation + mismatch"));
 
