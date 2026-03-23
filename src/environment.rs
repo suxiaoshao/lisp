@@ -66,6 +66,23 @@ impl Environment for GlobalEnvironment {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::value::Value;
+
+    #[test]
+    fn test_default_environment() {
+        let env = GlobalEnvironment::default();
+        let vars = HashMap::new();
+        // 通过get_variable获取#t和#f
+        let t_val = env.get_variable("#t", &vars);
+        assert_eq!(t_val, Some(Value::Boolean(true)));
+        let f_val = env.get_variable("#f", &vars);
+        assert_eq!(f_val, Some(Value::Boolean(false)));
+    }
+}
+
 impl GlobalEnvironment {
     fn get_language_function<T: Environment>(&self, name: &str) -> Option<Box<dyn Function<T>>> {
         let mut functions = Self::language_function_map();

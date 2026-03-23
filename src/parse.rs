@@ -1,7 +1,6 @@
 use std::{collections::HashMap, fmt::Display};
 
 use nom::{
-    IResult, Parser,
     branch::alt,
     bytes::complete::tag,
     character::complete::{multispace0, multispace1, none_of, one_of},
@@ -9,6 +8,7 @@ use nom::{
     multi::{many1, separated_list0},
     number::complete::double,
     sequence::delimited,
+    IResult, Parser,
 };
 use string::parse_string;
 
@@ -121,7 +121,7 @@ mod test {
 
     #[test]
     fn parse_expression_inner_test() -> anyhow::Result<()> {
-        let input = " 1 1 ";
+        let input = "1 1";
         let result = parse_expression_inner(input);
 
         assert_eq!(

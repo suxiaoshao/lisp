@@ -4,7 +4,7 @@ use crate::{
     environment::Environment,
     errors::LispComputerError,
     parse::Expression,
-    process::{Function, process_expression_list},
+    process::{process_expression_list, Function},
 };
 
 use super::Value;

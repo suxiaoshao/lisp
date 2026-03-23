@@ -34,3 +34,29 @@ impl Value {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_value_display() {
+        assert_eq!(format!("{}", Value::Number(42.0)), "42");
+        assert_eq!(
+            format!("{}", Value::String("hello".to_string())),
+            "\"hello\""
+        );
+        assert_eq!(format!("{}", Value::Boolean(true)), "true");
+        assert_eq!(format!("{}", Value::Boolean(false)), "false");
+        assert_eq!(format!("{}", Value::Nil), "nil");
+    }
+
+    #[test]
+    fn test_value_boolean() {
+        assert!(Value::Boolean(true).boolean());
+        assert!(!Value::Boolean(false).boolean());
+        assert!(!Value::Nil.boolean());
+        assert!(Value::Number(0.0).boolean());
+        assert!(Value::String("".to_string()).boolean());
+    }
+}

@@ -12,7 +12,7 @@ pub enum LispError {
     ComputerError(#[from] LispComputerError),
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, PartialEq, thiserror::Error)]
 pub enum LispComputerError {
     #[error("Unbound function:{}",.0)]
     UnboundFunction(String),
@@ -32,4 +32,32 @@ pub enum LispComputerError {
     ArityMismatch(String, usize, usize),
     #[error("Let naming not return")]
     LetNamingNotReturn,
+    #[error("Invalid expression: {0}")]
+    InvalidExpression(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_display() {
+        let err = LispComputerError::UnboundFunction("foo".to_string());
+        assert_eq!(format!("{}", err), "Unbound function:foo");
+
+        let err = LispComputerError::TypeMismatch1 {
+            operation: "+".to_string(),
+            left: Value::Number(1.0),
+        };
+        assert!(format!("{}", err).contains("Operation + mismatch"));
+
+        let err = LispComputerError::InvalidExpression("test expr".to_string());
+        assert_eq!(format!("{}", err), "Invalid expression: test expr");
+
+        let err = LispComputerError::ArityMismatch("func".to_string(), 2, 3);
+        assert_eq!(format!("{}", err), "Arity mismatch func: expected 2, got 3");
+
+        let err = LispComputerError::NotFoundVariable("x".to_string());
+        assert_eq!(format!("{}", err), "Variable not found: x");
+    }
 }
