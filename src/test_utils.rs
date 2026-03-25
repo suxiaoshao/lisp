@@ -1,7 +1,44 @@
+//! Test utilities for the Lisp interpreter.
+//!
+//! This module provides helper functions for testing, primarily `eval_str`
+//! which allows evaluating expressions in a fresh or provided arena.
+
 use crate::{errors::LispComputerError, parse::parse_expression, root::GcArena};
 use std::collections::HashMap;
 
-/// Evaluate a string expression in the given arena and return its display string.
+/// Evaluate a Lisp expression from a string in the given arena.
+///
+/// This is a convenience function for tests that:
+/// 1. Parses the input string into an expression
+/// 2. Evaluates it in a fresh environment (empty local variables)
+/// 3. Returns the result formatted as a display string
+///
+/// # Arguments
+/// - `input`: Lisp expression as a string
+/// - `arena`: GC arena to use for evaluation (must be mutable)
+///
+/// # Returns
+/// - `Ok(String)`: The result value converted to string (e.g., "42", "\"hello\"", "true")
+/// - `Err(LispComputerError)`: If parsing or evaluation fails
+///
+/// # Example
+/// ```
+/// use lisp::{parse::parse_expression, root::GcArena, value::Value};
+/// use std::collections::HashMap;
+/// let mut arena = GcArena::new(|mc| lisp::root::LispRoot::new(mc));
+/// arena.mutate(|mc, root| {
+///     let (_, expr) = parse_expression(mc, "(+ 1 2)").unwrap();
+///     let vars = HashMap::new();
+///     let value = expr.eval(root, &vars, mc).unwrap();
+///     assert_eq!(format!("{}", value), "3");
+///     Ok::<(), ()>(())
+/// }).unwrap();
+/// ```
+///
+/// # Notes
+/// - Uses empty local `variables` map (no closure environment)
+/// - All errors are converted to `LispComputerError` (parse errors become `InvalidExpression`)
+/// - The arena is mutated via `arena.mutate()`
 pub fn eval_str<'gc>(
     input: &str,
     arena: &'gc mut GcArena<'gc>,

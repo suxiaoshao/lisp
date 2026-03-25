@@ -1,3 +1,20 @@
+//! String parsing with escape sequence support.
+//!
+//! This module provides a parser for Lisp string literals that handles
+//! common escape sequences. It uses nom combinators to build a zero-copy
+//! parser that processes strings character by character.
+//!
+//! # Supported Escape Sequences
+//! - `\n` → newline (LF)
+//! - `\r` → carriage return
+//! - `\t` → horizontal tab
+//! - `\b` → backspace
+//! - `\f` → form feed
+//! - `\\` → backslash
+//! - `\/` → forward slash
+//! - `\"` → double quote
+//! - `\u{XXXX}` → Unicode character (hexadecimal, 1-6 digits)
+
 use nom::branch::alt;
 use nom::bytes::streaming::{is_not, take_while_m_n};
 use nom::character::streaming::{char, multispace1};
@@ -11,10 +28,26 @@ use nom::{IResult, Parser};
 // first we write parsers for the smallest elements (escaped characters),
 // then combine them into larger parsers.
 
-/// Parse a unicode sequence, of the form u{XXXX}, where XXXX is 1 to 6
-/// hexadecimal numerals. We will combine this later with parse_escaped_char
-/// to parse sequences like \u{00AC}.
-fn parse_unicode<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+/// Parse a Unicode escape sequence of the form `\u{XXXX}`.
+///
+/// The `XXXX` is 1 to 6 hexadecimal numerals representing a Unicode code point.
+/// This function parses the `u{...}` syntax and converts the hex value to a `char`.
+///
+/// # Example
+/// ```
+/// use lisp::parse::string::parse_unicode;
+/// use nom::error::Error;
+/// let result = parse_unicode::<Error<&str>>("u{00A9}");
+/// assert!(result.is_ok());
+/// ```
+///
+/// # Arguments
+/// - `input`: Input string starting with `u{`
+///
+/// # Returns
+/// - `Ok((remaining, char))` with the parsed Unicode character
+/// - `Err` if the format is invalid or code point is not a valid Unicode scalar value
+pub fn parse_unicode<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
 where
     E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
 {
@@ -44,7 +77,17 @@ where
     map_opt(parse_u32, std::char::from_u32).parse(input)
 }
 
-/// Parse an escaped character: \n, \t, \r, \u{00AC}, etc.
+/// Parse an escaped character after a backslash.
+///
+/// Handles common escape sequences: `\n`, `\r`, `\t`, `\b`, `\f`,
+/// `\\`, `\/`, `\"`, and Unicode escapes `\u{XXXX}`.
+///
+/// # Arguments
+/// - `input`: Input string starting with `\`
+///
+/// # Returns
+/// - `Ok((remaining, char))` with the parsed character
+/// - `Err` if escape sequence is invalid
 fn parse_escaped_char<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
 where
     E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
@@ -72,15 +115,35 @@ where
     .parse(input)
 }
 
-/// Parse a backslash, followed by any amount of whitespace. This is used later
-/// to discard any escaped whitespace.
+/// Parse escaped whitespace (backslash followed by whitespace).
+///
+/// Whitespace after a backslash is ignored in strings. This parser
+/// consumes `\` followed by one or more whitespace characters and
+/// discards them.
+///
+/// # Arguments
+/// - `input`: Input string
+///
+/// # Returns
+/// - `Ok((remaining, whitespace_string))` with the matched whitespace
+/// - `Err` if input doesn't start with `\` followed by whitespace
 fn parse_escaped_whitespace<'a, E: ParseError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, &'a str, E> {
     preceded(char('\\'), multispace1).parse(input)
 }
 
-/// Parse a non-empty block of text that doesn't include \ or "
+/// Parse a literal (non-escaped) text segment.
+///
+/// Matches a non-empty sequence of characters that are not `\` or `"`.
+/// This is the "normal" text in a string that doesn't contain escape sequences.
+///
+/// # Arguments
+/// - `input`: Input string
+///
+/// # Returns
+/// - `Ok((remaining, literal_text))` with the non-empty literal
+/// - `Err` if no literal found (empty or starts with `\` or `"`)
 fn parse_literal<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
     // `is_not` parses a string of 0 or more characters that aren't one of the
     // given characters.
@@ -93,18 +156,40 @@ fn parse_literal<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str,
     verify(not_quote_slash, |s: &str| !s.is_empty()).parse(input)
 }
 
-/// A string fragment contains a fragment of a string being parsed: either
-/// a non-empty Literal (a series of non-escaped characters), a single
-/// parsed escaped character, or a block of escaped whitespace.
+/// A fragment of a string being parsed.
+///
+/// During string parsing, the input is broken into fragments of three types:
+///
+/// # Variants
+///
+/// - `Literal(&'a str)`: A non-empty run of non-escaped characters
+/// - `EscapedChar(char)`: A single character from an escape sequence (e.g., `\n` → `\n`)
+/// - `EscapedWS`: Escaped whitespace (backslash + whitespace, which is discarded)
+///
+/// These fragments are accumulated to build the final parsed string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StringFragment<'a> {
+    /// A literal text segment with no escapes.
     Literal(&'a str),
+    /// A character parsed from an escape sequence.
     EscapedChar(char),
+    /// Escaped whitespace that should be discarded.
     EscapedWS,
 }
 
-/// Combine parse_literal, parse_escaped_whitespace, and parse_escaped_char
-/// into a StringFragment.
+/// Parse a single string fragment.
+///
+/// Attempts to parse one of:
+/// - A literal (using `parse_literal`)
+/// - An escaped character (using `parse_escaped_char`)
+/// - Escaped whitespace (using `parse_escaped_whitespace`)
+///
+/// # Arguments
+/// - `input`: Input string to parse
+///
+/// # Returns
+/// - `Ok((remaining, fragment))` with the parsed fragment
+/// - `Err` if no fragment could be parsed
 fn parse_fragment<'a, E>(input: &'a str) -> IResult<&'a str, StringFragment<'a>, E>
 where
     E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
@@ -119,8 +204,38 @@ where
     .parse(input)
 }
 
-/// Parse a string. Use a loop of parse_fragment and push all of the fragments
-/// into an output string.
+/// Parse a complete string literal with escape sequence support.
+///
+/// Parses a string enclosed in double quotes, processing escape sequences
+/// and accumulating fragments into the final `String` result.
+///
+/// # Syntax
+///
+/// Valid Lisp string literals:
+/// ```lisp
+/// "literal text"
+/// "text with \n newlines"
+/// "quotes: \"hello\""
+/// "unicode: \u{2764}"
+/// ```
+///
+/// # Arguments
+/// - `input`: Input string starting with `"` (double quote)
+///
+/// # Returns
+/// - `Ok((remaining, parsed_string))` with the parsed and unescaped string
+/// - `Err` if the string is malformed or escape sequences are invalid
+///
+/// # Example
+/// ```
+/// use lisp::parse::string::parse_string;
+/// # use nom::IResult;
+/// let result = parse_string::<nom::error::Error<&str>>("\"hello\\nworld\"");
+/// assert!(result.is_ok());
+/// let (rem, s) = result.unwrap();
+/// assert!(rem.is_empty());
+/// assert_eq!(s, "hello\nworld");
+/// ```
 pub fn parse_string<'a, E>(input: &'a str) -> IResult<&'a str, String, E>
 where
     E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,

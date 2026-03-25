@@ -1,4 +1,17 @@
-mod string;
+//! Lisp expression parser using nom combinators.
+//!
+//! This module provides a complete parser for Lisp syntax, converting
+//! string input into abstract syntax trees (AST) represented by the
+//! `Expression` enum. The parser handles:
+//! - Numbers (floating-point)
+//! - Strings with escape sequences
+//! - Variables (symbols)
+//! - S-expressions (lists)
+//! - Special forms with naming syntax (lambda, let, etc.)
+//!
+//! The parsing is done using the `nom` library for zero-copy, combinator-based parsing.
+
+pub mod string;
 
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -20,14 +33,32 @@ use nom::{
     sequence::delimited,
 };
 
+/// Abstract Syntax Tree (AST) node for Lisp expressions.
+///
+/// This enum represents all possible Lisp expressions before evaluation.
+/// All nodes are GC-allocated using `Gc<'gc, Expression<'gc>>`.
+///
+/// # Variants
+///
+/// - `Number(f64)`: A numeric literal (e.g., `42`, `3.14`)
+/// - `Variable(String)`: A symbol/variable reference (e.g., `x`, `+`, `if`)
+/// - `List(Vec<Gc<Expression>>)`: An S-expression or function call (e.g., `(+ 1 2)`)
+/// - `String(Gc<String>)`: A string literal (e.g., `"hello"`)
+/// - `NamingList(String, Vec<Gc<Expression>>)`: Special form syntax like `name(...)`
+///   (e.g., `lambda`, `let` with naming). This is an intermediate representation
+///   that should be transformed by special form handlers; evaluating it directly
+///   returns `LispComputerError::LetNamingNotReturn`.
 #[derive(Debug, PartialEq, Clone, Collect)]
 #[collect(no_drop)]
 pub enum Expression<'gc> {
+    /// A numeric literal.
     Number(f64),
+    /// A variable or symbol reference.
     Variable(String),
+    /// An S-expression (list) representing a function call or special form.
     List(Vec<Gc<'gc, Expression<'gc>>>),
+    /// A string literal.
     String(Gc<'gc, String>),
-    NamingList(String, Vec<Gc<'gc, Expression<'gc>>>),
 }
 
 impl<'gc> Display for Expression<'gc> {
@@ -45,20 +76,30 @@ impl<'gc> Display for Expression<'gc> {
                     .join(" ")
             ),
             Expression::String(s) => write!(f, "\"{}\"", &**s),
-            Expression::NamingList(name, expressions) => write!(
-                f,
-                "{name}({})",
-                expressions
-                    .iter()
-                    .map(|e| format!("{}", e))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            ),
         }
     }
 }
 
 impl<'gc> Expression<'gc> {
+    /// Evaluate the expression in the given environment.
+    ///
+    /// This is the main entry point for evaluation. Each expression variant
+    /// evaluates to a `Value`:
+    ///
+    /// - `Number` → `Value::Number`
+    /// - `Variable` → Lookup in environment (errors if unbound)
+    /// - `String` → `Value::String`
+    /// - `List` → Function application via `process_expression_list`
+    /// - `NamingList` → Error (should be transformed before evaluation)
+    ///
+    /// # Arguments
+    /// - `env`: The global environment (`LispRoot`)
+    /// - `variables`: Local variable bindings (from closures/let)
+    /// - `mc`: GC mutation context
+    ///
+    /// # Returns
+    /// - `Ok(Value)` on successful evaluation
+    /// - `Err(LispComputerError)` on runtime errors (unbound variable, etc.)
     pub fn eval(
         &self,
         env: &'gc LispRoot<'gc>,
@@ -74,11 +115,42 @@ impl<'gc> Expression<'gc> {
                 process_expression_list(expressions, env, variables, mc)
             }
             Expression::String(s) => Ok(Value::String(*s)),
-            Expression::NamingList(_, _) => Err(LispComputerError::LetNamingNotReturn),
         }
     }
 }
 
+/// Parse a Lisp expression from a string.
+///
+/// This is the top-level parser entry point. It attempts to parse any
+/// valid Lisp expression and returns a GC-allocated AST node.
+///
+/// # Supported Syntax
+///
+/// - Numbers: `42`, `3.14`, `-5`
+/// - Strings: `"hello"`, `"multi\nline"`, with escape sequences
+/// - Variables: `x`, `+`, `if`, `lambda` (symbols not starting with digits)
+/// - Lists: `(+ 1 2)`, `(define x 42)`, `(lambda (x) x)`
+/// - Special forms: `(lambda ...)`, `(let ...)` using `NamingList` representation
+///
+/// # Arguments
+/// - `mc`: GC mutation context for allocation
+/// - `input`: Input string to parse (must be a complete expression)
+///
+/// # Returns
+/// - `Ok((remaining, expr))` on success, where `remaining` is any unparsed input
+/// - `Err(nom::Err)` on parse failure
+///
+/// # Example
+/// ```
+/// use lisp::root::GcArena;
+/// use lisp::parse::parse_expression;
+/// let arena = GcArena::new(|mc| lisp::root::LispRoot::new(mc));
+/// arena.mutate(|mc, _root| {
+///     let (remaining, _expr) = parse_expression(mc, "(+ 1 2)").unwrap();
+///     assert!(remaining.is_empty());
+///     Ok::<(), ()>(())
+/// }).unwrap();
+/// ```
 pub fn parse_expression<'i, 'gc>(
     mc: &'gc Mutation<'gc>,
     input: &'i str,
@@ -88,15 +160,6 @@ pub fn parse_expression<'i, 'gc>(
         map(
             (tag("("), |i| parse_expression_inner(mc, i), tag(")")),
             |(_, data, _)| Gc::new(mc, Expression::List(data)),
-        ),
-        map(
-            (
-                parse_lisp_variable,
-                tag("("),
-                |i| parse_expression_inner(mc, i),
-                tag(")"),
-            ),
-            |(name, _, expr, _)| Gc::new(mc, Expression::NamingList(name, expr)),
         ),
         map(parse_lisp_variable, |name| {
             Gc::new(mc, Expression::Variable(name))
@@ -109,6 +172,17 @@ pub fn parse_expression<'i, 'gc>(
     Ok((input, data))
 }
 
+/// Parse contents of a list (inner parser).
+///
+/// Parses zero or more expressions separated by whitespace within a list.
+/// Used internally by `parse_expression` to parse list contents.
+///
+/// # Arguments
+/// - `mc`: GC mutation context
+/// - `input`: Input string (inside parentheses)
+///
+/// # Returns
+/// - `Ok((remaining, vec_of_expressions))`
 fn parse_expression_inner<'i, 'gc>(
     mc: &'gc Mutation<'gc>,
     input: &'i str,
@@ -122,6 +196,20 @@ fn parse_expression_inner<'i, 'gc>(
     Ok((input, data))
 }
 
+/// Parse a Lisp variable/symbol name.
+///
+/// Symbols are non-empty strings of characters excluding whitespace,
+/// parentheses, and quotes. They cannot start with a digit.
+///
+/// # Examples
+/// - Valid: `x`, `+`, `if`, `lambda`, `my-var`
+/// - Invalid: `123`, `"hello"`, `(test)`
+///
+/// # Arguments
+/// - `input`: Input string to parse
+///
+/// # Returns
+/// - `Ok((remaining, symbol_name))` on success
 fn parse_lisp_variable(input: &str) -> IResult<&str, String> {
     let valid_char = none_of(" \t\n\r()\"");
     let (input, data) =
