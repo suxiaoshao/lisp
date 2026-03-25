@@ -1,10 +1,10 @@
 mod string;
 
-use std::{collections::HashMap, fmt::Display};
+use std::collections::HashMap;
+use std::fmt::Display;
 
 use crate::{
-    environment::Environment, errors::LispComputerError, process::process_expression_list,
-    value::Value,
+    errors::LispComputerError, process::process_expression_list, root::LispRoot, value::Value,
 };
 use gc_arena::{Gc, Mutation};
 use gc_arena_derive::Collect;
@@ -59,9 +59,9 @@ impl<'gc> Display for Expression<'gc> {
 }
 
 impl<'gc> Expression<'gc> {
-    pub fn eval<T: Environment<'gc>>(
+    pub fn eval(
         &self,
-        env: &T,
+        env: &'gc LispRoot<'gc>,
         variables: &HashMap<String, Value<'gc>>,
         mc: &'gc Mutation<'gc>,
     ) -> Result<Value<'gc>, LispComputerError> {
@@ -134,15 +134,10 @@ mod test {
     use super::*;
     use crate::{errors::LispComputerError, root::GcArena};
     use anyhow::Result;
-    use gc_arena::Gc;
-    use gc_arena::lock::RefLock;
-    use std::collections::HashMap;
 
     #[test]
     fn parse_expression_inner_test() -> Result<()> {
-        let arena = GcArena::new(|mc| crate::root::LispRoot {
-            variables: Gc::new(mc, RefLock::new(HashMap::new())),
-        });
+        let arena = GcArena::new(|mc| crate::root::LispRoot::new(mc));
         arena.mutate(|mc, _root| -> Result<(), LispComputerError> {
             let input = "1 1";
             let (remaining, exprs) = parse_expression_inner(mc, input)
@@ -158,9 +153,7 @@ mod test {
 
     #[test]
     fn parse_expression_test() -> Result<()> {
-        let arena = GcArena::new(|mc| crate::root::LispRoot {
-            variables: Gc::new(mc, RefLock::new(HashMap::new())),
-        });
+        let arena = GcArena::new(|mc| crate::root::LispRoot::new(mc));
         arena.mutate(|mc, _root| -> Result<(), LispComputerError> {
             let input = "(+ 1 1)";
             let (remaining, expr) = parse_expression(mc, input)

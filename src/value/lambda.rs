@@ -3,11 +3,8 @@ use std::{
     fmt::Display,
 };
 
-use crate::{
-    environment::Environment, errors::LispComputerError, parse::Expression, process::Function,
-};
+use crate::{errors::LispComputerError, parse::Expression, value::Value};
 
-use super::Value;
 use gc_arena::{Gc, Mutation};
 use gc_arena_derive::Collect;
 
@@ -40,6 +37,37 @@ impl<'gc> Lambda<'gc> {
             body,
             captured,
         }
+    }
+
+    pub fn call(
+        &self,
+        args: &[Gc<'gc, Expression<'gc>>],
+        env: &'gc crate::root::LispRoot<'gc>,
+        variables: &HashMap<String, Value<'gc>>,
+        mc: &'gc Mutation<'gc>,
+    ) -> Result<Value<'gc>, LispComputerError> {
+        if args.len() != self.params.len() {
+            return Err(LispComputerError::ArityMismatch(
+                "lambda-function".to_string(),
+                self.params.len(),
+                args.len(),
+            ));
+        }
+        // Preserve caller-local bindings that are intentionally threaded through
+        // special forms such as named let, then overlay lexical captures.
+        let mut new_variables = variables.clone();
+        new_variables.extend(self.captured.clone());
+        // Bind arguments, allowing them to shadow captured variables
+        for (param, arg) in self.params.iter().zip(args) {
+            let value = arg.eval(env, variables, mc)?;
+            new_variables.insert(param.to_string(), value);
+        }
+        // Evaluate body expressions sequentially, returning the last result
+        let mut result = Value::Nil;
+        for expr in &self.body {
+            result = expr.eval(env, &new_variables, mc)?;
+        }
+        Ok(result)
     }
 
     pub fn collect_free_vars(
@@ -180,42 +208,5 @@ impl<'gc> Lambda<'gc> {
                 }
             }
         }
-    }
-}
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for Lambda<'gc> {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        if args.len() != self.params.len() {
-            return Err(LispComputerError::ArityMismatch(
-                <Self as Function<'gc, T>>::name(self).to_string(),
-                self.params.len(),
-                args.len(),
-            ));
-        }
-        // Preserve caller-local bindings that are intentionally threaded through
-        // special forms such as named let, then overlay lexical captures.
-        let mut new_variables = variables.clone();
-        new_variables.extend(self.captured.clone());
-        // Bind arguments, allowing them to shadow captured variables
-        for (param, arg) in self.params.iter().zip(args) {
-            let value = arg.eval(env, variables, mc)?;
-            new_variables.insert(param.to_string(), value);
-        }
-        // Evaluate body expressions sequentially, returning the last result
-        let mut result = Value::Nil;
-        for expr in &self.body {
-            result = expr.eval(env, &new_variables, mc)?;
-        }
-        Ok(result)
-    }
-
-    fn name(&self) -> &str {
-        "lambda-function"
     }
 }
