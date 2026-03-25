@@ -1,11 +1,8 @@
 use std::collections::HashMap;
 
 use errors::LispError;
-use gc_arena::Gc;
-use gc_arena::lock::RefLock;
 use rustyline::{DefaultEditor, error::ReadlineError};
 
-mod environment;
 mod errors;
 mod parse;
 mod process;
