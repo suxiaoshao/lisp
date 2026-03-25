@@ -611,10 +611,6 @@ impl<'gc, T: Environment<'gc>> Function<'gc, T> for DefineProcessor {
                                     }
                                     let mut captured: HashMap<String, Value<'gc>> = HashMap::new();
                                     for name in &free {
-                                        // Skip built-in functions - they are globally accessible
-                                        if env.is_builtin(name) {
-                                            continue;
-                                        }
                                         if let Some(value) = env.get_variable(name, variables) {
                                             captured.insert(name.clone(), value.clone());
                                         } else {
@@ -699,12 +695,15 @@ impl<'gc, T: Environment<'gc>> Function<'gc, T> for LambdaProcessor {
                     Lambda::collect_free_vars(expr, &bound, &mut free);
                 }
 
-                // Capture free variables from the current environment (excluding builtins)
+                // Capture free variables from the current environment
                 let mut captured: HashMap<String, Value<'gc>> = HashMap::new();
                 for name in &free {
-                    if env.is_builtin(name) {
-                        continue;
+                    if let Some(value) = env.get_variable(name, variables) {
+                        captured.insert(name.clone(), value.clone());
+                    } else {
+                        return Err(LispComputerError::NotFoundVariable(name.clone()));
                     }
+                }
                     if let Some(value) = env.get_variable(name, variables) {
                         captured.insert(name.clone(), value.clone());
                     } else {
@@ -799,10 +798,6 @@ impl<'gc, T: Environment<'gc>> Function<'gc, T> for LetProcessor {
             }
             let mut captured: HashMap<String, Value<'gc>> = HashMap::new();
             for name in &free {
-                // Skip built-in functions - they are globally accessible
-                if env.is_builtin(name) {
-                    continue;
-                }
                 if let Some(value) = env.get_variable(name, variables) {
                     captured.insert(name.clone(), value.clone());
                 } else {
@@ -1321,5 +1316,45 @@ mod tests {
         assert!(matches!(eval("\"test\""), Ok(s) if s == "\"test\""));
         assert_eq!(eval("#t"), Ok("true".to_string()));
         assert_eq!(eval("#f"), Ok("false".to_string()));
+    }
+
+    #[test]
+    fn test_shadow_builtin_in_closure() {
+        // Test that shadowing builtin functions works correctly with lexical scoping
+        // (let ((+ (lambda (x y) 42))) (lambda () (+ 1 2))) should return a lambda
+        let result = eval("(let ((+ (lambda (x y) 42))) (lambda () (+ 1 2)))");
+        assert!(result.is_ok());
+        assert!(result.unwrap().starts_with("<lambda>"));
+        // Applying the lambda should return 42, not 3
+        assert_eq!(
+            eval("((let ((+ (lambda (x y) 42))) (lambda () (+ 1 2))))"),
+            Ok("42".to_string())
+        );
+    }
+
+    #[test]
+    fn test_shadow_builtin_with_define() {
+        // Test define with lambda that captures shadowed builtin
+        let mut arena = new_arena();
+        assert_eq!(
+            test_utils::eval_str(
+                "(define f (let ((+ (lambda (x y) 42))) (lambda () (+ 1 2))))",
+                &mut arena
+            ),
+            Ok("nil".to_string())
+        );
+        assert_eq!(
+            test_utils::eval_str("(f)", &mut arena),
+            Ok("42".to_string())
+        );
+    }
+
+    #[test]
+    fn test_shadow_builtin_direct_lambda() {
+        // Direct lambda in shadowed environment
+        assert_eq!(
+            eval("(let ((* (lambda (x y) 99))) ((lambda (x y) (* x y)) 2 3))"),
+            Ok("99".to_string())
+        );
     }
 }
