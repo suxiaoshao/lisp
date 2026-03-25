@@ -3,13 +3,11 @@ mod string;
 use std::{collections::HashMap, fmt::Display};
 
 use crate::{
-    environment::Environment, errors::LispComputerError, process::process_expression_list,
-    value::Value,
+    errors::LispComputerError, process::process_expression_list, root::LispRoot, value::Value,
 };
 use gc_arena::{Gc, Mutation};
 use gc_arena_derive::Collect;
 use nom::{
-    IResult, Parser,
     branch::alt,
     bytes::complete::tag,
     character::complete::{multispace0, multispace1, none_of, one_of},
@@ -18,6 +16,7 @@ use nom::{
     multi::{many1, separated_list0},
     number::complete::double,
     sequence::delimited,
+    IResult, Parser,
 };
 
 #[derive(Debug, PartialEq, Clone, Collect)]
@@ -59,9 +58,9 @@ impl<'gc> Display for Expression<'gc> {
 }
 
 impl<'gc> Expression<'gc> {
-    pub fn eval<T: Environment<'gc>>(
+    pub fn eval(
         &self,
-        env: &T,
+        env: &'gc LispRoot<'gc>,
         variables: &HashMap<String, Value<'gc>>,
         mc: &'gc Mutation<'gc>,
     ) -> Result<Value<'gc>, LispComputerError> {
@@ -134,8 +133,8 @@ mod test {
     use super::*;
     use crate::{errors::LispComputerError, root::GcArena};
     use anyhow::Result;
-    use gc_arena::Gc;
     use gc_arena::lock::RefLock;
+    use gc_arena::Gc;
     use std::collections::HashMap;
 
     #[test]
