@@ -1,27 +1,779 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::{
-    environment::Environment,
-    errors::LispComputerError,
-    parse::Expression,
-    value::{Lambda, Value},
-};
+use crate::{errors::LispComputerError, parse::Expression, root::LispRoot, value::Value};
 use gc_arena::{Gc, Mutation};
 
-pub trait Function<'gc, T: Environment<'gc>> {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError>;
-    fn name(&self) -> &str;
+/// 处理器函数：加法
+pub fn addition_call<'gc>(
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Value<'gc>, LispComputerError> {
+    let mut sum = 0.0;
+    let mut result_string = String::new();
+    let mut saw_number = false;
+    let mut saw_string = false;
+
+    for arg in args {
+        match arg.eval(env, variables, mc)? {
+            Value::Number(n) => {
+                if !saw_string {
+                    saw_number = true;
+                    sum += n;
+                } else {
+                    return Err(LispComputerError::TypeMismatch2 {
+                        operation: "+".to_string(),
+                        left_str: result_string.clone(),
+                        right_str: n.to_string(),
+                    });
+                }
+            }
+            Value::String(s) => {
+                if !saw_number {
+                    saw_string = true;
+                    result_string.push_str(&s);
+                } else {
+                    return Err(LispComputerError::TypeMismatch2 {
+                        operation: "+".to_string(),
+                        left_str: sum.to_string(),
+                        right_str: s.to_string(),
+                    });
+                }
+            }
+            other => {
+                return Err(LispComputerError::TypeMismatch1 {
+                    operation: "+".to_string(),
+                    left_str: format!("{}", other),
+                });
+            }
+        }
+    }
+
+    if !result_string.is_empty() {
+        Ok(Value::String(Gc::new(mc, result_string)))
+    } else {
+        Ok(Value::Number(sum))
+    }
 }
 
-pub fn process_expression_list<'gc, T: Environment<'gc>>(
+/// 处理器函数：减法
+pub fn subtraction_call<'gc>(
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Value<'gc>, LispComputerError> {
+    if let Some((first, rest)) = args.split_first() {
+        let initial_value = match first.eval(env, variables, mc)? {
+            Value::Number(n) => n,
+            value => {
+                return Err(LispComputerError::TypeMismatch1 {
+                    operation: "-".to_string(),
+                    left_str: format!("{}", value),
+                });
+            }
+        };
+        let value = if rest.is_empty() {
+            -initial_value
+        } else {
+            rest.iter().try_fold(initial_value, |acc, expr| {
+                let value = expr.eval(env, variables, mc)?;
+                match value {
+                    Value::Number(num) => Ok(acc - num),
+                    other => Err(LispComputerError::TypeMismatch1 {
+                        operation: "-".to_string(),
+                        left_str: format!("{}", other),
+                    }),
+                }
+            })?
+        };
+        Ok(Value::Number(value))
+    } else {
+        Err(LispComputerError::TypeMismatch1 {
+            operation: "-".to_string(),
+            left_str: "nil".to_string(),
+        })
+    }
+}
+
+/// 处理器函数：乘法
+pub fn multiplication_call<'gc>(
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Value<'gc>, LispComputerError> {
+    let mut result = 1.0;
+    for arg in args {
+        match arg.eval(env, variables, mc)? {
+            Value::Number(num) => result *= num,
+            other => {
+                return Err(LispComputerError::TypeMismatch1 {
+                    operation: "*".to_string(),
+                    left_str: format!("{}", other),
+                });
+            }
+        }
+    }
+    Ok(Value::Number(result))
+}
+
+/// 处理器函数：除法
+pub fn division_call<'gc>(
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Value<'gc>, LispComputerError> {
+    if let Some((first, rest)) = args.split_first() {
+        let initial_value = match first.eval(env, variables, mc)? {
+            Value::Number(n) => n,
+            value => {
+                return Err(LispComputerError::TypeMismatch1 {
+                    operation: "/".to_string(),
+                    left_str: format!("{}", value),
+                });
+            }
+        };
+        let value = rest.iter().try_fold(initial_value, |acc, expr| {
+            let value = expr.eval(env, variables, mc)?;
+            match value {
+                Value::Number(n) => Ok(acc / n),
+                value => Err(LispComputerError::TypeMismatch2 {
+                    operation: "/".to_string(),
+                    left_str: acc.to_string(),
+                    right_str: format!("{}", value),
+                }),
+            }
+        })?;
+        Ok(Value::Number(value))
+    } else {
+        Err(LispComputerError::TypeMismatch1 {
+            operation: "/".to_string(),
+            left_str: "nil".to_string(),
+        })
+    }
+}
+
+/// 处理器函数：等于
+pub fn equal_call<'gc>(
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Value<'gc>, LispComputerError> {
+    if args.len() < 2 {
+        return Err(LispComputerError::ArityMismatch(
+            "=".to_string(),
+            2,
+            args.len(),
+        ));
+    }
+
+    let mut evaluated_args = Vec::new();
+    for arg in args {
+        evaluated_args.push(arg.eval(env, variables, mc)?);
+    }
+
+    for pair in evaluated_args.windows(2) {
+        if pair[0] != pair[1] {
+            return Ok(Value::Boolean(false));
+        }
+    }
+
+    Ok(Value::Boolean(true))
+}
+
+/// 处理器函数：大于
+pub fn greater_than_call<'gc>(
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Value<'gc>, LispComputerError> {
+    if args.len() < 2 {
+        return Err(LispComputerError::ArityMismatch(
+            ">".to_string(),
+            2,
+            args.len(),
+        ));
+    }
+
+    let mut evaluated_args = Vec::new();
+    for arg in args {
+        match arg.eval(env, variables, mc)? {
+            Value::Number(n) => evaluated_args.push(n),
+            other => {
+                return Err(LispComputerError::TypeMismatch1 {
+                    operation: ">".to_string(),
+                    left_str: format!("{}", other),
+                });
+            }
+        }
+    }
+
+    for pair in evaluated_args.windows(2) {
+        if pair[0] <= pair[1] {
+            return Ok(Value::Boolean(false));
+        }
+    }
+
+    Ok(Value::Boolean(true))
+}
+
+/// 处理器函数：小于
+pub fn less_than_call<'gc>(
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Value<'gc>, LispComputerError> {
+    if args.len() < 2 {
+        return Err(LispComputerError::InvalidArguments(
+            "<".to_string(),
+            args.iter().map(|e| format!("{}", e)).collect(),
+        ));
+    }
+
+    let mut evaluated_args = Vec::new();
+    for arg in args {
+        match arg.eval(env, variables, mc)? {
+            Value::Number(n) => evaluated_args.push(n),
+            other => {
+                return Err(LispComputerError::TypeMismatch1 {
+                    operation: "<".to_string(),
+                    left_str: format!("{}", other),
+                });
+            }
+        }
+    }
+
+    for pair in evaluated_args.windows(2) {
+        if pair[0] >= pair[1] {
+            return Ok(Value::Boolean(false));
+        }
+    }
+
+    Ok(Value::Boolean(true))
+}
+
+/// 处理器函数：大于等于
+pub fn greater_equal_call<'gc>(
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Value<'gc>, LispComputerError> {
+    if args.len() < 2 {
+        return Err(LispComputerError::InvalidArguments(
+            ">=".to_string(),
+            args.iter().map(|e| format!("{}", e)).collect(),
+        ));
+    }
+    let mut evaluated_args = Vec::new();
+
+    for arg in args {
+        match arg.eval(env, variables, mc)? {
+            Value::Number(n) => evaluated_args.push(n),
+            other => {
+                return Err(LispComputerError::TypeMismatch1 {
+                    operation: ">=".to_string(),
+                    left_str: format!("{}", other),
+                });
+            }
+        }
+    }
+    for pair in evaluated_args.windows(2) {
+        if pair[0] < pair[1] {
+            return Ok(Value::Boolean(false));
+        }
+    }
+    Ok(Value::Boolean(true))
+}
+
+/// 处理器函数：小于等于
+pub fn less_equal_call<'gc>(
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Value<'gc>, LispComputerError> {
+    if args.len() < 2 {
+        return Err(LispComputerError::InvalidArguments(
+            "<=".to_string(),
+            args.iter().map(|e| format!("{}", e)).collect(),
+        ));
+    }
+    let mut evaluated_args = Vec::new();
+    for arg in args {
+        match arg.eval(env, variables, mc)? {
+            Value::Number(n) => evaluated_args.push(n),
+            other => {
+                return Err(LispComputerError::TypeMismatch1 {
+                    operation: "<=".to_string(),
+                    left_str: format!("{}", other),
+                });
+            }
+        }
+    }
+    for pair in evaluated_args.windows(2) {
+        if pair[0] > pair[1] {
+            return Ok(Value::Boolean(false));
+        }
+    }
+    Ok(Value::Boolean(true))
+}
+
+/// 处理器函数：if（特殊形式，lazy）
+pub fn if_call<'gc>(
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Value<'gc>, LispComputerError> {
+    match args {
+        [condition, then_branch, else_branch] => {
+            let condition = condition.eval(env, variables, mc)?.boolean();
+            match condition {
+                true => then_branch.eval(env, variables, mc),
+                false => else_branch.eval(env, variables, mc),
+            }
+        }
+        _ => Err(LispComputerError::ArityMismatch(
+            "if".to_string(),
+            3,
+            args.len(),
+        )),
+    }
+}
+
+/// 处理器函数：or
+pub fn or_call<'gc>(
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Value<'gc>, LispComputerError> {
+    let mut last_value = Value::Boolean(false);
+
+    for arg in args {
+        let value = arg.eval(env, variables, mc)?;
+        if value.boolean() {
+            return Ok(value);
+        }
+        last_value = value;
+    }
+
+    Ok(last_value)
+}
+
+/// 处理器函数：and
+pub fn and_call<'gc>(
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Value<'gc>, LispComputerError> {
+    let mut last_value = Value::Boolean(true);
+
+    for arg in args {
+        let value = arg.eval(env, variables, mc)?;
+        if !value.boolean() {
+            return Ok(value);
+        }
+        last_value = value;
+    }
+
+    Ok(last_value)
+}
+
+/// 处理器函数：cond
+pub fn cond_call<'gc>(
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Value<'gc>, LispComputerError> {
+    if let Some((last, args)) = args.split_last() {
+        for arg in args {
+            if let Expression::List(inner_args) = &**arg
+                && let [condition, result] = inner_args.as_slice()
+            {
+                let condition_value = condition.eval(env, variables, mc)?;
+                if condition_value.boolean() {
+                    return result.eval(env, variables, mc);
+                }
+            }
+        }
+        if let Expression::List(inner_args) = &**last
+            && let [var_gc, result_gc] = inner_args.as_slice()
+            && let Expression::Variable(name) = &**var_gc
+            && name == "else"
+        {
+            return result_gc.eval(env, variables, mc);
+        }
+    }
+    Err(LispComputerError::InvalidArguments(
+        "cond".to_string(),
+        args.iter().map(|e| format!("{}", e)).collect(),
+    ))
+}
+
+/// 处理器函数：define
+pub fn define_call<'gc>(
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Value<'gc>, LispComputerError> {
+    match args {
+        [first, second] => {
+            if let Expression::Variable(name) = &**first {
+                let value = second.eval(env, variables, mc)?;
+                env.set_variable(name.to_string(), value, mc);
+                Ok(Value::Nil)
+            } else if let Expression::List(params) = &**first {
+                if let Expression::List(body) = &**second {
+                    match params.as_slice() {
+                        [var, tail @ ..] => {
+                            if let Expression::Variable(name) = &**var {
+                                let params_vec = tail
+                                    .iter()
+                                    .map(|param| match &**param {
+                                        Expression::Variable(name) => Ok(name.clone()),
+                                        _ => Err(LispComputerError::InvalidArguments(
+                                            "lambda-params".to_string(),
+                                            params.iter().map(|e| format!("{}", e)).collect(),
+                                        )),
+                                    })
+                                    .collect::<Result<Vec<String>, LispComputerError>>()?;
+                                // Compute free variables and capture environment
+                                let bound: HashSet<String> = params_vec.iter().cloned().collect();
+                                let mut free = HashSet::new();
+                                for expr in body {
+                                    crate::value::Lambda::collect_free_vars(
+                                        expr, &bound, &mut free,
+                                    );
+                                }
+                                let mut captured: HashMap<String, Value<'gc>> = HashMap::new();
+                                for name in &free {
+                                    if let Some(value) = env.get_variable(name, variables) {
+                                        captured.insert(name.clone(), value.clone());
+                                    } else {
+                                        return Err(LispComputerError::NotFoundVariable(
+                                            name.clone(),
+                                        ));
+                                    }
+                                }
+                                let lambda =
+                                    crate::value::Lambda::new(params_vec, body.clone(), captured);
+                                env.set_variable(
+                                    name.to_string(),
+                                    Value::Lambda(Gc::new(mc, lambda)),
+                                    mc,
+                                );
+                                Ok(Value::Nil)
+                            } else {
+                                Err(LispComputerError::InvalidArguments(
+                                    "lambda-params".to_string(),
+                                    params.iter().map(|e| format!("{}", e)).collect(),
+                                ))
+                            }
+                        }
+                        _ => Err(LispComputerError::InvalidArguments(
+                            "define".to_string(),
+                            args.iter().map(|e| format!("{}", e)).collect(),
+                        )),
+                    }
+                } else {
+                    Err(LispComputerError::InvalidArguments(
+                        "define".to_string(),
+                        args.iter().map(|e| format!("{}", e)).collect(),
+                    ))
+                }
+            } else {
+                Err(LispComputerError::InvalidArguments(
+                    "define".to_string(),
+                    args.iter().map(|e| format!("{}", e)).collect(),
+                ))
+            }
+        }
+        _ => Err(LispComputerError::InvalidArguments(
+            "define".to_string(),
+            args.iter().map(|e| format!("{}", e)).collect(),
+        )),
+    }
+}
+
+/// 处理器函数：lambda
+pub fn lambda_call<'gc>(
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Value<'gc>, LispComputerError> {
+    // args should be: [params_gc, body1, body2, ...]
+    if let [params_gc, rest @ ..] = args {
+        if let Expression::List(params) = &**params_gc {
+            let param_names: Vec<String> = params
+                .iter()
+                .map(|param| match &**param {
+                    Expression::Variable(name) => Ok(name.clone()),
+                    _ => Err(LispComputerError::InvalidArguments(
+                        "lambda-params".to_string(),
+                        params.iter().map(|e| format!("{}", e)).collect(),
+                    )),
+                })
+                .collect::<Result<Vec<String>, LispComputerError>>()?;
+
+            // Compute free variables in the body expressions, excluding lambda's own parameters
+            let bound: std::collections::HashSet<String> = param_names.iter().cloned().collect();
+            let mut free = std::collections::HashSet::new();
+            for expr in rest {
+                crate::value::Lambda::collect_free_vars(expr, &bound, &mut free);
+            }
+
+            // Capture free variables from the current environment
+            let mut captured: HashMap<String, Value<'gc>> = HashMap::new();
+            for name in &free {
+                if let Some(value) = env.get_variable(name, variables) {
+                    captured.insert(name.clone(), value.clone());
+                } else {
+                    return Err(LispComputerError::NotFoundVariable(name.clone()));
+                }
+            }
+
+            // Body is the slice `rest` converted to Vec
+            let body_vec = rest.to_vec();
+            Ok(Value::Lambda(Gc::new(
+                mc,
+                crate::value::Lambda::new(param_names, body_vec, captured),
+            )))
+        } else {
+            Err(LispComputerError::InvalidArguments(
+                "lambda".to_string(),
+                args.iter().map(|e| format!("{}", e)).collect(),
+            ))
+        }
+    } else {
+        Err(LispComputerError::InvalidArguments(
+            "lambda".to_string(),
+            args.iter().map(|e| format!("{}", e)).collect(),
+        ))
+    }
+}
+
+/// 处理器函数：let
+pub fn let_call<'gc>(
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Value<'gc>, LispComputerError> {
+    fn get_lambda_from<'gc>(
+        env: &LispRoot<'gc>,
+        variables: &HashMap<String, Value<'gc>>,
+        mc: &'gc Mutation<'gc>,
+        recursive_name: Option<&str>,
+        bindings: &[Gc<'gc, Expression<'gc>>],
+        body: &[Gc<'gc, Expression<'gc>>],
+    ) -> Result<
+        (
+            Gc<'gc, crate::value::Lambda<'gc>>,
+            Vec<Gc<'gc, Expression<'gc>>>,
+        ),
+        LispComputerError,
+    > {
+        let mut params = Vec::new();
+        let mut lambda_args = Vec::new();
+        for binding in bindings {
+            match &**binding {
+                Expression::List(list) => match list.as_slice() {
+                    [var, value] => {
+                        if let Expression::Variable(name) = &**var {
+                            params.push(name.to_string());
+                            lambda_args.push(*value);
+                        } else {
+                            return Err(LispComputerError::InvalidArguments(
+                                "let-bindings".to_string(),
+                                bindings.iter().map(|e| format!("{}", e)).collect(),
+                            ));
+                        }
+                    }
+                    _ => {
+                        return Err(LispComputerError::InvalidArguments(
+                            "let-bindings".to_string(),
+                            bindings.iter().map(|e| format!("{}", e)).collect(),
+                        ));
+                    }
+                },
+                _ => {
+                    return Err(LispComputerError::InvalidArguments(
+                        "let-bindings".to_string(),
+                        bindings.iter().map(|e| format!("{}", e)).collect(),
+                    ));
+                }
+            }
+        }
+
+        // Compute free variables and capture environment
+        let mut bound: HashSet<String> = params.iter().cloned().collect();
+        if let Some(name) = recursive_name {
+            bound.insert(name.to_string());
+        }
+        let mut free = HashSet::new();
+        for expr in body {
+            crate::value::Lambda::collect_free_vars(expr, &bound, &mut free);
+        }
+        let mut captured: HashMap<String, Value<'gc>> = HashMap::new();
+        for name in &free {
+            if let Some(value) = env.get_variable(name, variables) {
+                captured.insert(name.clone(), value.clone());
+            } else {
+                return Err(LispComputerError::NotFoundVariable(name.clone()));
+            }
+        }
+
+        let lambda = Gc::new(
+            mc,
+            crate::value::Lambda::new(params, body.to_vec(), captured),
+        );
+        Ok((lambda, lambda_args))
+    }
+    match args {
+        // let naming: (let name ((var val) ...) body...)
+        [name_expr, bindings_gc, rest @ ..] if matches!(&**name_expr, Expression::Variable(_)) => {
+            if let (Expression::Variable(name), Expression::List(bindings)) =
+                (&**name_expr, &**bindings_gc)
+            {
+                if rest.is_empty() {
+                    return Err(LispComputerError::InvalidArguments(
+                        "let".to_string(),
+                        args.iter().map(|e| format!("{}", e)).collect(),
+                    ));
+                }
+                let (lambda, lambda_args) =
+                    get_lambda_from(env, variables, mc, Some(name), bindings, rest)?;
+                let mut new_vars = variables.clone();
+                new_vars.insert(name.to_string(), Value::Lambda(lambda));
+                crate::value::Lambda::call(&lambda, &lambda_args, env, &new_vars, mc)
+            } else {
+                Err(LispComputerError::InvalidArguments(
+                    "let".to_string(),
+                    args.iter().map(|e| format!("{}", e)).collect(),
+                ))
+            }
+        }
+        // let: (let ((var val) ...) body...)
+        [bindings_gc, rest @ ..] => {
+            if let Expression::List(bindings) = &**bindings_gc {
+                if rest.is_empty() {
+                    return Err(LispComputerError::InvalidArguments(
+                        "let".to_string(),
+                        args.iter().map(|e| format!("{}", e)).collect(),
+                    ));
+                }
+                let (lambda, lambda_args) =
+                    get_lambda_from(env, variables, mc, None, bindings, rest)?;
+                crate::value::Lambda::call(&lambda, &lambda_args, env, variables, mc)
+            } else {
+                Err(LispComputerError::InvalidArguments(
+                    "let".to_string(),
+                    args.iter().map(|e| format!("{}", e)).collect(),
+                ))
+            }
+        }
+        _ => Err(LispComputerError::InvalidArguments(
+            "let".to_string(),
+            args.iter().map(|e| format!("{}", e)).collect(),
+        )),
+    }
+}
+
+/// 处理器函数：do
+pub fn do_call<'gc>(
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Value<'gc>, LispComputerError> {
+    match args {
+        [bindings_gc, test_gc, bodys @ ..] => {
+            if let (Expression::List(bindings), Expression::List(test)) =
+                (&**bindings_gc, &**test_gc)
+            {
+                let mut new_variables = variables.clone();
+                let mut steps = Vec::new();
+                for binding in bindings {
+                    match &**binding {
+                        Expression::List(list) => match list.as_slice() {
+                            [var_gc, value_gc, step_expr_gc] => {
+                                if let Expression::Variable(name) = &**var_gc {
+                                    let evaluated = value_gc.eval(env, variables, mc)?;
+                                    new_variables.insert(name.clone(), evaluated);
+                                    steps.push((name.clone(), *step_expr_gc));
+                                } else {
+                                    return Err(LispComputerError::InvalidArguments(
+                                        "do".to_string(),
+                                        args.iter().map(|e| format!("{}", e)).collect(),
+                                    ));
+                                }
+                            }
+                            _ => {
+                                return Err(LispComputerError::InvalidArguments(
+                                    "do".to_string(),
+                                    args.iter().map(|e| format!("{}", e)).collect(),
+                                ));
+                            }
+                        },
+                        _ => {
+                            return Err(LispComputerError::InvalidArguments(
+                                "do".to_string(),
+                                args.iter().map(|e| format!("{}", e)).collect(),
+                            ));
+                        }
+                    }
+                }
+                let (test_expr, result_expr) = match test.as_slice() {
+                    [test, result] => (*test, *result),
+                    _ => {
+                        return Err(LispComputerError::InvalidArguments(
+                            "do".to_string(),
+                            args.iter().map(|e| format!("{}", e)).collect(),
+                        ));
+                    }
+                };
+                loop {
+                    if test_expr.eval(env, &new_variables, mc)?.boolean() {
+                        return result_expr.eval(env, &new_variables, mc);
+                    }
+                    for body in bodys {
+                        body.eval(env, &new_variables, mc)?;
+                    }
+                    for (name, step_expr) in &steps {
+                        let new_value = step_expr.eval(env, &new_variables, mc)?;
+                        new_variables.insert(name.clone(), new_value);
+                    }
+                }
+            } else {
+                Err(LispComputerError::InvalidArguments(
+                    "do".to_string(),
+                    args.iter().map(|e| format!("{}", e)).collect(),
+                ))
+            }
+        }
+        _ => Err(LispComputerError::InvalidArguments(
+            "do".to_string(),
+            args.iter().map(|e| format!("{}", e)).collect(),
+        )),
+    }
+}
+
+/// 表达式求值入口（Expression::eval 的辅助函数）
+pub fn process_expression_list<'gc>(
     expressions: &[Gc<'gc, Expression<'gc>>],
-    env: &T,
+    env: &'gc LispRoot<'gc>,
     variables: &HashMap<String, Value<'gc>>,
     mc: &'gc Mutation<'gc>,
 ) -> Result<Value<'gc>, LispComputerError> {
@@ -31,13 +783,13 @@ pub fn process_expression_list<'gc, T: Environment<'gc>>(
             Expression::Variable(name) => env.process_variable(name, tail, variables, mc),
             Expression::List(_) => {
                 let callee_value = callee.eval(env, variables, mc)?;
-                if let Value::Lambda(func) = callee_value {
-                    func.process(tail, env, variables, mc)
-                } else {
-                    Err(LispComputerError::TypeMismatch1 {
+                match callee_value {
+                    Value::Lambda(lambda) => lambda.call(tail, env, variables, mc),
+                    Value::Processor(proc, _name) => proc(tail, env, variables, mc),
+                    _ => Err(LispComputerError::TypeMismatch1 {
                         operation: "function application".to_string(),
                         left_str: format!("{}", callee_value),
-                    })
+                    }),
                 }
             }
             _ => Err(LispComputerError::InvalidExpression(format!(
@@ -48,922 +800,10 @@ pub fn process_expression_list<'gc, T: Environment<'gc>>(
     }
 }
 
-// Processors
-
-pub struct AdditionProcessor;
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for AdditionProcessor {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        let mut sum = 0.0;
-        let mut result_string = String::new();
-        let mut saw_number = false;
-        let mut saw_string = false;
-
-        for arg in args {
-            match arg.eval(env, variables, mc)? {
-                Value::Number(n) => {
-                    if !saw_string {
-                        saw_number = true;
-                        sum += n;
-                    } else {
-                        return Err(LispComputerError::TypeMismatch2 {
-                            operation: <Self as Function<'gc, T>>::name(self).to_string(),
-                            left_str: result_string.clone(),
-                            right_str: n.to_string(),
-                        });
-                    }
-                }
-                Value::String(s) => {
-                    if !saw_number {
-                        saw_string = true;
-                        result_string.push_str(&s);
-                    } else {
-                        return Err(LispComputerError::TypeMismatch2 {
-                            operation: <Self as Function<'gc, T>>::name(self).to_string(),
-                            left_str: sum.to_string(),
-                            right_str: s.to_string(),
-                        });
-                    }
-                }
-                other => {
-                    return Err(LispComputerError::TypeMismatch1 {
-                        operation: <Self as Function<'gc, T>>::name(self).to_string(),
-                        left_str: format!("{}", other),
-                    });
-                }
-            }
-        }
-
-        if !result_string.is_empty() {
-            Ok(Value::String(Gc::new(mc, result_string)))
-        } else {
-            Ok(Value::Number(sum))
-        }
-    }
-
-    fn name(&self) -> &str {
-        "+"
-    }
-}
-
-pub struct SubtractionProcessor;
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for SubtractionProcessor {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        if let Some((first, rest)) = args.split_first() {
-            let initial_value = match first.eval(env, variables, mc)? {
-                Value::Number(n) => n,
-                value => {
-                    return Err(LispComputerError::TypeMismatch1 {
-                        operation: <Self as Function<'gc, T>>::name(self).to_string(),
-                        left_str: format!("{}", value),
-                    });
-                }
-            };
-            let value = if rest.is_empty() {
-                -initial_value
-            } else {
-                rest.iter().try_fold(initial_value, |acc, expr| {
-                    let value = expr.eval(env, variables, mc)?;
-                    match value {
-                        Value::Number(num) => Ok(acc - num),
-                        other => Err(LispComputerError::TypeMismatch1 {
-                            operation: <Self as Function<'gc, T>>::name(self).to_string(),
-                            left_str: format!("{}", other),
-                        }),
-                    }
-                })?
-            };
-            Ok(Value::Number(value))
-        } else {
-            Err(LispComputerError::TypeMismatch1 {
-                operation: <Self as Function<'gc, T>>::name(self).to_string(),
-                left_str: "nil".to_string(),
-            })
-        }
-    }
-
-    fn name(&self) -> &str {
-        "-"
-    }
-}
-
-pub struct MultiplicationProcessor;
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for MultiplicationProcessor {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        let mut result = 1.0;
-        for arg in args {
-            match arg.eval(env, variables, mc)? {
-                Value::Number(num) => result *= num,
-                other => {
-                    return Err(LispComputerError::TypeMismatch1 {
-                        operation: <Self as Function<'gc, T>>::name(self).to_string(),
-                        left_str: format!("{}", other),
-                    });
-                }
-            }
-        }
-        Ok(Value::Number(result))
-    }
-
-    fn name(&self) -> &str {
-        "*"
-    }
-}
-
-pub struct DivisionProcessor;
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for DivisionProcessor {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        if let Some((first, rest)) = args.split_first() {
-            let initial_value = match first.eval(env, variables, mc)? {
-                Value::Number(n) => n,
-                value => {
-                    return Err(LispComputerError::TypeMismatch1 {
-                        operation: <Self as Function<'gc, T>>::name(self).to_string(),
-                        left_str: format!("{}", value),
-                    });
-                }
-            };
-            let value = rest.iter().try_fold(initial_value, |acc, expr| {
-                let value = expr.eval(env, variables, mc)?;
-                match value {
-                    Value::Number(n) => Ok(acc / n),
-                    value => Err(LispComputerError::TypeMismatch2 {
-                        operation: <Self as Function<'gc, T>>::name(self).to_string(),
-                        left_str: acc.to_string(),
-                        right_str: format!("{}", value),
-                    }),
-                }
-            })?;
-            Ok(Value::Number(value))
-        } else {
-            Err(LispComputerError::TypeMismatch1 {
-                operation: <Self as Function<'gc, T>>::name(self).to_string(),
-                left_str: "nil".to_string(),
-            })
-        }
-    }
-
-    fn name(&self) -> &str {
-        "/"
-    }
-}
-
-pub struct EqualProcessor;
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for EqualProcessor {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        if args.len() < 2 {
-            return Err(LispComputerError::ArityMismatch(
-                <Self as Function<'gc, T>>::name(self).to_string(),
-                2,
-                args.len(),
-            ));
-        }
-
-        let mut evaluated_args = Vec::new();
-        for arg in args {
-            evaluated_args.push(arg.eval(env, variables, mc)?);
-        }
-
-        for pair in evaluated_args.windows(2) {
-            if pair[0] != pair[1] {
-                return Ok(Value::Boolean(false));
-            }
-        }
-
-        Ok(Value::Boolean(true))
-    }
-
-    fn name(&self) -> &str {
-        "="
-    }
-}
-
-pub struct GreaterThanProcessor;
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for GreaterThanProcessor {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        if args.len() < 2 {
-            return Err(LispComputerError::ArityMismatch(
-                <Self as Function<'gc, T>>::name(self).to_string(),
-                2,
-                args.len(),
-            ));
-        }
-
-        let mut evaluated_args = Vec::new();
-        for arg in args {
-            match arg.eval(env, variables, mc)? {
-                Value::Number(n) => evaluated_args.push(n),
-                other => {
-                    return Err(LispComputerError::TypeMismatch1 {
-                        operation: <Self as Function<'gc, T>>::name(self).to_string(),
-                        left_str: format!("{}", other),
-                    });
-                }
-            }
-        }
-
-        for pair in evaluated_args.windows(2) {
-            if pair[0] <= pair[1] {
-                return Ok(Value::Boolean(false));
-            }
-        }
-
-        Ok(Value::Boolean(true))
-    }
-
-    fn name(&self) -> &str {
-        ">"
-    }
-}
-
-pub struct LessThanProcessor;
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for LessThanProcessor {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        if args.len() < 2 {
-            return Err(LispComputerError::InvalidArguments(
-                <Self as Function<'gc, T>>::name(self).to_string(),
-                args.iter().map(|e| format!("{}", e)).collect(),
-            ));
-        }
-
-        let mut evaluated_args = Vec::new();
-        for arg in args {
-            match arg.eval(env, variables, mc)? {
-                Value::Number(n) => evaluated_args.push(n),
-                other => {
-                    return Err(LispComputerError::TypeMismatch1 {
-                        operation: <Self as Function<'gc, T>>::name(self).to_string(),
-                        left_str: format!("{}", other),
-                    });
-                }
-            }
-        }
-
-        for pair in evaluated_args.windows(2) {
-            if pair[0] >= pair[1] {
-                return Ok(Value::Boolean(false));
-            }
-        }
-
-        Ok(Value::Boolean(true))
-    }
-
-    fn name(&self) -> &str {
-        "<"
-    }
-}
-
-pub struct GreaterEqualProcessor;
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for GreaterEqualProcessor {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        if args.len() < 2 {
-            return Err(LispComputerError::InvalidArguments(
-                <Self as Function<'gc, T>>::name(self).to_string(),
-                args.iter().map(|e| format!("{}", e)).collect(),
-            ));
-        }
-        let mut evaluated_args = Vec::new();
-
-        for arg in args {
-            match arg.eval(env, variables, mc)? {
-                Value::Number(n) => evaluated_args.push(n),
-                other => {
-                    return Err(LispComputerError::TypeMismatch1 {
-                        operation: <Self as Function<'gc, T>>::name(self).to_string(),
-                        left_str: format!("{}", other),
-                    });
-                }
-            }
-        }
-        for pair in evaluated_args.windows(2) {
-            if pair[0] < pair[1] {
-                return Ok(Value::Boolean(false));
-            }
-        }
-        Ok(Value::Boolean(true))
-    }
-
-    fn name(&self) -> &str {
-        ">="
-    }
-}
-
-pub struct LessEqualProcessor;
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for LessEqualProcessor {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        if args.len() < 2 {
-            return Err(LispComputerError::InvalidArguments(
-                <Self as Function<'gc, T>>::name(self).to_string(),
-                args.iter().map(|e| format!("{}", e)).collect(),
-            ));
-        }
-        let mut evaluated_args = Vec::new();
-        for arg in args {
-            match arg.eval(env, variables, mc)? {
-                Value::Number(n) => evaluated_args.push(n),
-                other => {
-                    return Err(LispComputerError::TypeMismatch1 {
-                        operation: <Self as Function<'gc, T>>::name(self).to_string(),
-                        left_str: format!("{}", other),
-                    });
-                }
-            }
-        }
-        for pair in evaluated_args.windows(2) {
-            if pair[0] > pair[1] {
-                return Ok(Value::Boolean(false));
-            }
-        }
-        Ok(Value::Boolean(true))
-    }
-
-    fn name(&self) -> &str {
-        "<="
-    }
-}
-
-pub struct IfProcessor;
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for IfProcessor {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        match args {
-            [condition, then_branch, else_branch] => {
-                let condition = condition.eval(env, variables, mc)?.boolean();
-                match condition {
-                    true => then_branch.eval(env, variables, mc),
-                    false => else_branch.eval(env, variables, mc),
-                }
-            }
-            _ => Err(LispComputerError::ArityMismatch(
-                <Self as Function<'gc, T>>::name(self).to_string(),
-                3,
-                args.len(),
-            )),
-        }
-    }
-
-    fn name(&self) -> &str {
-        "if"
-    }
-}
-
-pub struct OrProcessor;
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for OrProcessor {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        let mut last_value = Value::Boolean(false);
-
-        for arg in args {
-            let value = arg.eval(env, variables, mc)?;
-            if value.boolean() {
-                return Ok(value);
-            }
-            last_value = value;
-        }
-
-        Ok(last_value)
-    }
-
-    fn name(&self) -> &str {
-        "or"
-    }
-}
-
-pub struct AndProcessor;
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for AndProcessor {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        let mut last_value = Value::Boolean(true);
-
-        for arg in args {
-            let value = arg.eval(env, variables, mc)?;
-            if !value.boolean() {
-                return Ok(value);
-            }
-            last_value = value;
-        }
-
-        Ok(last_value)
-    }
-
-    fn name(&self) -> &str {
-        "and"
-    }
-}
-
-pub struct CondProcessor;
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for CondProcessor {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        if let Some((last, args)) = args.split_last() {
-            for arg in args {
-                if let Expression::List(inner_args) = &**arg
-                    && let [condition, result] = inner_args.as_slice()
-                {
-                    let condition_value = condition.eval(env, variables, mc)?;
-                    if condition_value.boolean() {
-                        return result.eval(env, variables, mc);
-                    }
-                }
-            }
-            if let Expression::List(inner_args) = &**last
-                && let [var_gc, result_gc] = inner_args.as_slice()
-                && let Expression::Variable(name) = &**var_gc
-                && name == "else"
-            {
-                return result_gc.eval(env, variables, mc);
-            }
-        }
-        Err(LispComputerError::InvalidArguments(
-            <Self as Function<'gc, T>>::name(self).to_string(),
-            args.iter().map(|e| format!("{}", e)).collect(),
-        ))
-    }
-
-    fn name(&self) -> &str {
-        "cond"
-    }
-}
-
-pub struct DefineProcessor;
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for DefineProcessor {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        match args {
-            [first, second] => {
-                if let Expression::Variable(name) = &**first {
-                    let value = second.eval(env, variables, mc)?;
-                    env.set_variable(name.to_string(), value, mc);
-                    Ok(Value::Nil)
-                } else if let Expression::List(params) = &**first {
-                    if let Expression::List(body) = &**second {
-                        match params.as_slice() {
-                            [var, tail @ ..] => {
-                                if let Expression::Variable(name) = &**var {
-                                    let params_vec = tail
-                                        .iter()
-                                        .map(|param| match &**param {
-                                            Expression::Variable(name) => Ok(name.clone()),
-                                            _ => Err(LispComputerError::InvalidArguments(
-                                                "lambda-params".to_string(),
-                                                params.iter().map(|e| format!("{}", e)).collect(),
-                                            )),
-                                        })
-                                        .collect::<Result<Vec<String>, LispComputerError>>()?;
-                                    // Compute free variables and capture environment
-                                    let bound: HashSet<String> =
-                                        params_vec.iter().cloned().collect();
-                                    let mut free = HashSet::new();
-                                    for expr in body {
-                                        Lambda::collect_free_vars(expr, &bound, &mut free);
-                                    }
-                                    let mut captured: HashMap<String, Value<'gc>> = HashMap::new();
-                                    for name in &free {
-                                        // Skip built-in functions - they are globally accessible
-                                        if env.is_builtin(name) {
-                                            continue;
-                                        }
-                                        if let Some(value) = env.get_variable(name, variables) {
-                                            captured.insert(name.clone(), value.clone());
-                                        } else {
-                                            return Err(LispComputerError::NotFoundVariable(
-                                                name.clone(),
-                                            ));
-                                        }
-                                    }
-                                    let lambda = Lambda::new(params_vec, body.clone(), captured);
-                                    env.set_variable(
-                                        name.to_string(),
-                                        Value::Lambda(Gc::new(mc, lambda)),
-                                        mc,
-                                    );
-                                    Ok(Value::Nil)
-                                } else {
-                                    Err(LispComputerError::InvalidArguments(
-                                        "lambda-params".to_string(),
-                                        params.iter().map(|e| format!("{}", e)).collect(),
-                                    ))
-                                }
-                            }
-                            _ => Err(LispComputerError::InvalidArguments(
-                                <Self as Function<'gc, T>>::name(self).to_string(),
-                                args.iter().map(|e| format!("{}", e)).collect(),
-                            )),
-                        }
-                    } else {
-                        Err(LispComputerError::InvalidArguments(
-                            <Self as Function<'gc, T>>::name(self).to_string(),
-                            args.iter().map(|e| format!("{}", e)).collect(),
-                        ))
-                    }
-                } else {
-                    Err(LispComputerError::InvalidArguments(
-                        <Self as Function<'gc, T>>::name(self).to_string(),
-                        args.iter().map(|e| format!("{}", e)).collect(),
-                    ))
-                }
-            }
-            _ => Err(LispComputerError::InvalidArguments(
-                <Self as Function<'gc, T>>::name(self).to_string(),
-                args.iter().map(|e| format!("{}", e)).collect(),
-            )),
-        }
-    }
-
-    fn name(&self) -> &str {
-        "define"
-    }
-}
-
-pub struct LambdaProcessor;
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for LambdaProcessor {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        // args should be: [params_gc, body1, body2, ...]
-        if let [params_gc, rest @ ..] = args {
-            if let Expression::List(params) = &**params_gc {
-                let param_names: Vec<String> = params
-                    .iter()
-                    .map(|param| match &**param {
-                        Expression::Variable(name) => Ok(name.clone()),
-                        _ => Err(LispComputerError::InvalidArguments(
-                            "lambda-params".to_string(),
-                            params.iter().map(|e| format!("{}", e)).collect(),
-                        )),
-                    })
-                    .collect::<Result<Vec<String>, LispComputerError>>()?;
-
-                // Compute free variables in the body expressions, excluding lambda's own parameters
-                let bound: std::collections::HashSet<String> =
-                    param_names.iter().cloned().collect();
-                let mut free = std::collections::HashSet::new();
-                for expr in rest {
-                    Lambda::collect_free_vars(expr, &bound, &mut free);
-                }
-
-                // Capture free variables from the current environment (excluding builtins)
-                let mut captured: HashMap<String, Value<'gc>> = HashMap::new();
-                for name in &free {
-                    if env.is_builtin(name) {
-                        continue;
-                    }
-                    if let Some(value) = env.get_variable(name, variables) {
-                        captured.insert(name.clone(), value.clone());
-                    } else {
-                        return Err(LispComputerError::NotFoundVariable(name.clone()));
-                    }
-                }
-
-                // Body is the slice `rest` converted to Vec
-                let body_vec = rest.to_vec();
-                Ok(Value::Lambda(Gc::new(
-                    mc,
-                    Lambda::new(param_names, body_vec, captured),
-                )))
-            } else {
-                Err(LispComputerError::InvalidArguments(
-                    <Self as Function<'gc, T>>::name(self).to_string(),
-                    args.iter().map(|e| format!("{}", e)).collect(),
-                ))
-            }
-        } else {
-            Err(LispComputerError::InvalidArguments(
-                <Self as Function<'gc, T>>::name(self).to_string(),
-                args.iter().map(|e| format!("{}", e)).collect(),
-            ))
-        }
-    }
-
-    fn name(&self) -> &str {
-        "lambda"
-    }
-}
-
-pub struct LetProcessor;
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for LetProcessor {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        fn get_lambda_from<'gc, U: Environment<'gc>>(
-            env: &U,
-            variables: &HashMap<String, Value<'gc>>,
-            mc: &'gc Mutation<'gc>,
-            recursive_name: Option<&str>,
-            bindings: &[Gc<'gc, Expression<'gc>>],
-            body: &[Gc<'gc, Expression<'gc>>],
-        ) -> Result<(Gc<'gc, Lambda<'gc>>, Vec<Gc<'gc, Expression<'gc>>>), LispComputerError>
-        {
-            let mut params = Vec::new();
-            let mut lambda_args = Vec::new();
-            for binding in bindings {
-                match &**binding {
-                    Expression::List(list) => match list.as_slice() {
-                        [var, value] => {
-                            if let Expression::Variable(name) = &**var {
-                                params.push(name.to_string());
-                                lambda_args.push(*value);
-                            } else {
-                                return Err(LispComputerError::InvalidArguments(
-                                    "let-bindings".to_string(),
-                                    bindings.iter().map(|e| format!("{}", e)).collect(),
-                                ));
-                            }
-                        }
-                        _ => {
-                            return Err(LispComputerError::InvalidArguments(
-                                "let-bindings".to_string(),
-                                bindings.iter().map(|e| format!("{}", e)).collect(),
-                            ));
-                        }
-                    },
-                    _ => {
-                        return Err(LispComputerError::InvalidArguments(
-                            "let-bindings".to_string(),
-                            bindings.iter().map(|e| format!("{}", e)).collect(),
-                        ));
-                    }
-                }
-            }
-
-            // Compute free variables and capture environment
-            let mut bound: HashSet<String> = params.iter().cloned().collect();
-            if let Some(name) = recursive_name {
-                bound.insert(name.to_string());
-            }
-            let mut free = HashSet::new();
-            for expr in body {
-                Lambda::collect_free_vars(expr, &bound, &mut free);
-            }
-            let mut captured: HashMap<String, Value<'gc>> = HashMap::new();
-            for name in &free {
-                // Skip built-in functions - they are globally accessible
-                if env.is_builtin(name) {
-                    continue;
-                }
-                if let Some(value) = env.get_variable(name, variables) {
-                    captured.insert(name.clone(), value.clone());
-                } else {
-                    return Err(LispComputerError::NotFoundVariable(name.clone()));
-                }
-            }
-
-            let lambda = Gc::new(mc, Lambda::new(params, body.to_vec(), captured));
-            Ok((lambda, lambda_args))
-        }
-        match args {
-            // let naming: (let name ((var val) ...) body...)
-            [name_expr, bindings_gc, rest @ ..]
-                if matches!(&**name_expr, Expression::Variable(_)) =>
-            {
-                if let (Expression::Variable(name), Expression::List(bindings)) =
-                    (&**name_expr, &**bindings_gc)
-                {
-                    if rest.is_empty() {
-                        return Err(LispComputerError::InvalidArguments(
-                            <Self as Function<'gc, T>>::name(self).to_string(),
-                            args.iter().map(|e| format!("{}", e)).collect(),
-                        ));
-                    }
-                    let (lambda, lambda_args) =
-                        get_lambda_from(env, variables, mc, Some(name), bindings, rest)?;
-                    let mut new_vars = variables.clone();
-                    new_vars.insert(name.to_string(), Value::Lambda(lambda));
-                    lambda.process(&lambda_args, env, &new_vars, mc)
-                } else {
-                    Err(LispComputerError::InvalidArguments(
-                        <Self as Function<'gc, T>>::name(self).to_string(),
-                        args.iter().map(|e| format!("{}", e)).collect(),
-                    ))
-                }
-            }
-            // let: (let ((var val) ...) body...)
-            [bindings_gc, rest @ ..] => {
-                if let Expression::List(bindings) = &**bindings_gc {
-                    if rest.is_empty() {
-                        return Err(LispComputerError::InvalidArguments(
-                            <Self as Function<'gc, T>>::name(self).to_string(),
-                            args.iter().map(|e| format!("{}", e)).collect(),
-                        ));
-                    }
-                    let (lambda, lambda_args) =
-                        get_lambda_from(env, variables, mc, None, bindings, rest)?;
-                    lambda.process(&lambda_args, env, variables, mc)
-                } else {
-                    Err(LispComputerError::InvalidArguments(
-                        <Self as Function<'gc, T>>::name(self).to_string(),
-                        args.iter().map(|e| format!("{}", e)).collect(),
-                    ))
-                }
-            }
-            _ => Err(LispComputerError::InvalidArguments(
-                <Self as Function<'gc, T>>::name(self).to_string(),
-                args.iter().map(|e| format!("{}", e)).collect(),
-            )),
-        }
-    }
-
-    fn name(&self) -> &str {
-        "let"
-    }
-}
-
-pub struct DoProcessor;
-
-impl<'gc, T: Environment<'gc>> Function<'gc, T> for DoProcessor {
-    fn process(
-        &self,
-        args: &[Gc<'gc, Expression<'gc>>],
-        env: &T,
-        variables: &HashMap<String, Value<'gc>>,
-        mc: &'gc Mutation<'gc>,
-    ) -> Result<Value<'gc>, LispComputerError> {
-        match args {
-            [bindings_gc, test_gc, bodys @ ..] => {
-                if let (Expression::List(bindings), Expression::List(test)) =
-                    (&**bindings_gc, &**test_gc)
-                {
-                    let mut new_variables = variables.clone();
-                    let mut steps = Vec::new();
-                    for binding in bindings {
-                        match &**binding {
-                            Expression::List(list) => match list.as_slice() {
-                                [var_gc, value_gc, step_expr_gc] => {
-                                    if let Expression::Variable(name) = &**var_gc {
-                                        let evaluated = value_gc.eval(env, variables, mc)?;
-                                        new_variables.insert(name.clone(), evaluated);
-                                        steps.push((name.clone(), *step_expr_gc));
-                                    } else {
-                                        return Err(LispComputerError::InvalidArguments(
-                                            <Self as Function<'gc, T>>::name(self).to_string(),
-                                            args.iter().map(|e| format!("{}", e)).collect(),
-                                        ));
-                                    }
-                                }
-                                _ => {
-                                    return Err(LispComputerError::InvalidArguments(
-                                        <Self as Function<'gc, T>>::name(self).to_string(),
-                                        args.iter().map(|e| format!("{}", e)).collect(),
-                                    ));
-                                }
-                            },
-                            _ => {
-                                return Err(LispComputerError::InvalidArguments(
-                                    <Self as Function<'gc, T>>::name(self).to_string(),
-                                    args.iter().map(|e| format!("{}", e)).collect(),
-                                ));
-                            }
-                        }
-                    }
-                    let (test_expr, result_expr) = match test.as_slice() {
-                        [test, result] => (*test, *result),
-                        _ => {
-                            return Err(LispComputerError::InvalidArguments(
-                                <Self as Function<'gc, T>>::name(self).to_string(),
-                                args.iter().map(|e| format!("{}", e)).collect(),
-                            ));
-                        }
-                    };
-                    loop {
-                        if test_expr.eval(env, &new_variables, mc)?.boolean() {
-                            return result_expr.eval(env, &new_variables, mc);
-                        }
-                        for body in bodys {
-                            body.eval(env, &new_variables, mc)?;
-                        }
-                        for (name, step_expr) in &steps {
-                            let new_value = step_expr.eval(env, &new_variables, mc)?;
-                            new_variables.insert(name.clone(), new_value);
-                        }
-                    }
-                } else {
-                    Err(LispComputerError::InvalidArguments(
-                        <Self as Function<'gc, T>>::name(self).to_string(),
-                        args.iter().map(|e| format!("{}", e)).collect(),
-                    ))
-                }
-            }
-            _ => Err(LispComputerError::InvalidArguments(
-                <Self as Function<'gc, T>>::name(self).to_string(),
-                args.iter().map(|e| format!("{}", e)).collect(),
-            )),
-        }
-    }
-
-    fn name(&self) -> &str {
-        "do"
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_utils;
-    use gc_arena::Gc;
-    use gc_arena::lock::RefLock;
-    use std::collections::HashMap;
 
     fn eval(input: &str) -> Result<String, LispComputerError> {
         let mut arena = new_arena();
@@ -971,14 +811,7 @@ mod tests {
     }
 
     fn new_arena() -> crate::root::GcArena<'static> {
-        crate::root::GcArena::new(|mc| {
-            let mut vars = HashMap::new();
-            vars.insert("#f".to_string(), Value::Boolean(false));
-            vars.insert("#t".to_string(), Value::Boolean(true));
-            crate::root::LispRoot {
-                variables: Gc::new(mc, RefLock::new(vars)),
-            }
-        })
+        crate::root::GcArena::new(|mc| crate::root::LispRoot::new(mc))
     }
 
     #[test]
@@ -1221,6 +1054,11 @@ mod tests {
     }
 
     #[test]
+    fn test_higher_order_builtin() {
+        assert_eq!(eval("((lambda (f) (f 1 2)) +)"), Ok("3".to_string()));
+    }
+
+    #[test]
     fn test_if() {
         assert_eq!(eval("(if #t 1 2)"), Ok("1".to_string()));
         assert_eq!(eval("(if #f 1 2)"), Ok("2".to_string()));
@@ -1321,5 +1159,45 @@ mod tests {
         assert!(matches!(eval("\"test\""), Ok(s) if s == "\"test\""));
         assert_eq!(eval("#t"), Ok("true".to_string()));
         assert_eq!(eval("#f"), Ok("false".to_string()));
+    }
+
+    #[test]
+    fn test_shadow_builtin_in_closure() {
+        // Test that shadowing builtin functions works correctly with lexical scoping
+        // (let ((+ (lambda (x y) 42))) (lambda () (+ 1 2))) should return a lambda
+        let result = eval("(let ((+ (lambda (x y) 42))) (lambda () (+ 1 2)))");
+        assert!(result.is_ok());
+        assert!(result.unwrap().starts_with("<lambda>"));
+        // Applying the lambda should return 42, not 3
+        assert_eq!(
+            eval("((let ((+ (lambda (x y) 42))) (lambda () (+ 1 2))))"),
+            Ok("42".to_string())
+        );
+    }
+
+    #[test]
+    fn test_shadow_builtin_with_define() {
+        // Test define with lambda that captures shadowed builtin
+        let mut arena = new_arena();
+        assert_eq!(
+            test_utils::eval_str(
+                "(define f (let ((+ (lambda (x y) 42))) (lambda () (+ 1 2))))",
+                &mut arena
+            ),
+            Ok("nil".to_string())
+        );
+        assert_eq!(
+            test_utils::eval_str("(f)", &mut arena),
+            Ok("42".to_string())
+        );
+    }
+
+    #[test]
+    fn test_shadow_builtin_direct_lambda() {
+        // Direct lambda in shadowed environment
+        assert_eq!(
+            eval("(let ((* (lambda (x y) 99))) ((lambda (x y) (* x y)) 2 3))"),
+            Ok("99".to_string())
+        );
     }
 }

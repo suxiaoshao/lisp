@@ -1,11 +1,8 @@
 use std::collections::HashMap;
 
 use errors::LispError;
-use gc_arena::Gc;
-use gc_arena::lock::RefLock;
 use rustyline::{DefaultEditor, error::ReadlineError};
 
-mod environment;
 mod errors;
 mod parse;
 mod process;
@@ -17,14 +14,7 @@ mod test_utils;
 
 fn main() -> Result<(), LispError> {
     let mut rl = DefaultEditor::new()?;
-    let arena = root::GcArena::new(|mc| {
-        let mut vars = HashMap::new();
-        vars.insert("#f".to_string(), value::Value::Boolean(false));
-        vars.insert("#t".to_string(), value::Value::Boolean(true));
-        root::LispRoot {
-            variables: Gc::new(mc, RefLock::new(vars)),
-        }
-    });
+    let arena = root::GcArena::new(|mc| root::LispRoot::new(mc));
 
     loop {
         let readline = rl.readline(">> ");
