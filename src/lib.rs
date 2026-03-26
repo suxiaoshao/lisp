@@ -84,16 +84,19 @@
 //! - [`LispComputerError`] for error handling
 //! - [`parse_string`] for string parsing
 //!
-//! # Modules
+//! # Internal Modules
 //!
-//! - [`parse`]: Parser and AST implementation
-//! - [`value`]: Values and closures
-//! - [`root`]: GC arena root
-//! - `process`: Built-in function implementations (internal)
-//! - [`errors`]: Error types
-//! - [`parse_string`]: String parser
+//! This crate uses internal modules for organization. The public API is
+//! primarily re-exported at the crate root:
 //!
-//! For comprehensive usage examples, see the [README](README.md).
+//! - `parse`: Internal parser implementation (use `parse_expression` from root)
+//! - `value`: Internal value types (use `Value`, `Lambda` from root)
+//! - `root`: Internal GC arena root (use `GcArena`, `LispRoot` from root)
+//! - `process`: Internal built-in function implementations
+//! - `errors`: Internal error types (use `LispError`, `LispComputerError` from root)
+//! - [`parse_string`]: String parsing module (re-exported at root as `parse_string`)
+//!
+//! See the [Re-exports](#reexports) section above for the complete public API.
 
 // Re-export core types and functions for convenient access
 pub use crate::errors::{LispComputerError, LispError};
@@ -102,13 +105,13 @@ pub use crate::root::{GcArena, LispRoot};
 pub use crate::value::{Lambda, ProcessorFunc, Value};
 pub use gc_arena::Gc;
 
-pub mod errors;
-pub mod parse;
+mod errors;
+mod parse;
 mod process;
-pub mod root;
+mod root;
 #[allow(dead_code)]
 mod test_utils;
-pub mod value;
+mod value;
 
 pub mod parse_string {
     //! String parsing with escape sequence support.

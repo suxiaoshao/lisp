@@ -155,9 +155,9 @@ impl<'gc> Lambda<'gc> {
     ///
     /// # Example
     /// ```
-    /// use lisp::value::Lambda;
+    /// use lisp::Lambda;
     /// use std::collections::HashSet;
-    /// use lisp::parse::Expression;
+    /// use lisp::Expression;
     /// // In real code, you would have an actual Expression AST.
     /// // This is a simplified demonstration of the API:
     /// let mut free: HashSet<String> = HashSet::new();

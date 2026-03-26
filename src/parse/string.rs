@@ -33,14 +33,6 @@ use nom::{IResult, Parser};
 /// The `XXXX` is 1 to 6 hexadecimal numerals representing a Unicode code point.
 /// This function parses the `u{...}` syntax and converts the hex value to a `char`.
 ///
-/// # Example
-/// ```
-/// use lisp::parse::string::parse_unicode;
-/// use nom::error::Error;
-/// let result = parse_unicode::<Error<&str>>("u{00A9}");
-/// assert!(result.is_ok());
-/// ```
-///
 /// # Arguments
 /// - `input`: Input string starting with `u{`
 ///
@@ -228,7 +220,7 @@ where
 ///
 /// # Example
 /// ```
-/// use lisp::parse::string::parse_string;
+/// use lisp::parse_string::parse_string;
 /// # use nom::IResult;
 /// let result = parse_string::<nom::error::Error<&str>>("\"hello\\nworld\"");
 /// assert!(result.is_ok());
