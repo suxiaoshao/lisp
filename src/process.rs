@@ -11,10 +11,17 @@
 //! All functions follow the `ProcessorFunc` signature and are registered
 //! as `Value::Processor` in `LispRoot::new()`.
 
-use std::collections::{HashMap, HashSet};
-
-use crate::{errors::LispComputerError, parse::Expression, root::LispRoot, value::Value};
+use crate::{
+    Symbol, errors::LispComputerError, parse::Expression, root::LispRoot, symbol::ResolvedVar,
+    value::Value,
+};
 use gc_arena::{Gc, Mutation};
+
+type LetLambdaParts<'gc> = (
+    Vec<Symbol<'gc>>,
+    Vec<Gc<'gc, Expression<'gc>>>,
+    Vec<Gc<'gc, Expression<'gc>>>,
+);
 
 /// Addition operator (`+`).
 ///
@@ -663,8 +670,8 @@ pub fn cond_call<'gc>(
         }
         if let Expression::List(inner_args) = &**last
             && let [var_gc, result_gc] = inner_args.as_slice()
-            && let Expression::Variable(name) = &**var_gc
-            && name == "else"
+            && let Expression::Symbol(symbol) = &**var_gc
+            && &*symbol.name == "else"
         {
             return result_gc.eval(env, locals, mc);
         }
@@ -706,45 +713,32 @@ pub fn define_call<'gc>(
 ) -> Result<Value<'gc>, LispComputerError> {
     match args {
         [first, second] => {
-            if let Expression::Variable(name) = &**first {
+            if let Expression::Symbol(name) = &**first {
                 // Simple variable definition: (define x value)
                 let value = second.eval(env, locals, mc)?;
-                env.set_variable(name.to_string(), value, mc);
+                env.set_global(*name, value, mc);
                 Ok(Value::Nil)
             } else if let Expression::List(params) = &**first {
                 // Function definition: (define (name params...) body...)
                 if let Expression::List(body) = &**second {
                     match params.as_slice() {
                         [var, tail @ ..] => {
-                            if let Expression::Variable(name) = &**var {
+                            if let Expression::Symbol(name) = &**var {
                                 // Extract parameter names
                                 let params_vec = tail
                                     .iter()
                                     .map(|param| match &**param {
-                                        Expression::Variable(name) => Ok(name.clone()),
+                                        Expression::Symbol(name) => Ok(*name),
                                         _ => Err(LispComputerError::InvalidArguments(
                                             "lambda-params".to_string(),
                                             params.iter().map(|e| format!("{}", e)).collect(),
                                         )),
                                     })
-                                    .collect::<Result<Vec<String>, LispComputerError>>()?;
-                                // Compute free variables in body (closure capture)
-                                let bound: HashSet<String> = params_vec.iter().cloned().collect();
-                                let mut free = HashSet::new();
-                                for expr in body {
-                                    crate::value::Lambda::collect_free_vars(
-                                        expr, &bound, &mut free,
-                                    );
-                                }
-                                // Capture free variables from environment using new capture_env
-                                let captured = env.capture_env(&free, locals, mc)?;
+                                    .collect::<Result<Vec<Symbol<'gc>>, LispComputerError>>()?;
+                                let captured = env.snapshot_closure_env(locals, mc);
                                 let lambda =
                                     crate::value::Lambda::new(params_vec, body.clone(), captured);
-                                env.set_variable(
-                                    name.to_string(),
-                                    Value::Lambda(Gc::new(mc, lambda)),
-                                    mc,
-                                );
+                                env.set_global(*name, Value::Lambda(Gc::new(mc, lambda)), mc);
                                 Ok(Value::Nil)
                             } else {
                                 Err(LispComputerError::InvalidArguments(
@@ -816,26 +810,17 @@ pub fn lambda_call<'gc>(
     if let [params_gc, rest @ ..] = args {
         if let Expression::List(params) = &**params_gc {
             // Extract parameter names
-            let param_names: Vec<String> = params
+            let param_names: Vec<Symbol<'gc>> = params
                 .iter()
                 .map(|param| match &**param {
-                    Expression::Variable(name) => Ok(name.clone()),
+                    Expression::Symbol(name) => Ok(*name),
                     _ => Err(LispComputerError::InvalidArguments(
                         "lambda-params".to_string(),
                         params.iter().map(|e| format!("{}", e)).collect(),
                     )),
                 })
-                .collect::<Result<Vec<String>, LispComputerError>>()?;
-
-            // Compute free variables for closure capture
-            let bound: std::collections::HashSet<String> = param_names.iter().cloned().collect();
-            let mut free = std::collections::HashSet::new();
-            for expr in rest {
-                crate::value::Lambda::collect_free_vars(expr, &bound, &mut free);
-            }
-
-            // Capture free variables using the new capture_env
-            let captured = env.capture_env(&free, locals, mc)?;
+                .collect::<Result<Vec<Symbol<'gc>>, LispComputerError>>()?;
+            let captured = env.snapshot_closure_env(locals, mc);
 
             // Create closure
             let body_vec = rest.to_vec();
@@ -898,26 +883,20 @@ pub fn let_call<'gc>(
     /// Helper: construct a lambda from let bindings and body.
     fn get_lambda_from<'gc>(
         env: &LispRoot<'gc>,
-        arg_env: crate::root::LocalEnv<'gc>,
+        _arg_env: crate::root::LocalEnv<'gc>,
         mc: &'gc Mutation<'gc>,
-        recursive_name: Option<&str>,
+        recursive_name: Option<crate::Symbol<'gc>>,
         bindings: &[Gc<'gc, Expression<'gc>>],
         body: &[Gc<'gc, Expression<'gc>>],
-    ) -> Result<
-        (
-            Gc<'gc, crate::value::Lambda<'gc>>,
-            Vec<Gc<'gc, Expression<'gc>>>,
-        ),
-        LispComputerError,
-    > {
+    ) -> Result<LetLambdaParts<'gc>, LispComputerError> {
         let mut params = Vec::new();
         let mut lambda_args = Vec::new();
         for binding in bindings {
             match &**binding {
                 Expression::List(list) => match list.as_slice() {
                     [var, value] => {
-                        if let Expression::Variable(name) = &**var {
-                            params.push(name.to_string());
+                        if let Expression::Symbol(name) = &**var {
+                            params.push(*name);
                             lambda_args.push(*value);
                         } else {
                             return Err(LispComputerError::InvalidArguments(
@@ -941,31 +920,17 @@ pub fn let_call<'gc>(
                 }
             }
         }
+        let _ = recursive_name;
+        let _ = env;
+        let _ = mc;
 
-        // Compute free variables for closure capture
-        let mut bound: HashSet<String> = params.iter().cloned().collect();
-        if let Some(name) = recursive_name {
-            bound.insert(name.to_string());
-        }
-        let mut free = HashSet::new();
-        for expr in body {
-            crate::value::Lambda::collect_free_vars(expr, &bound, &mut free);
-        }
-
-        // Capture free variables using capture_env
-        let captured = env.capture_env(&free, &arg_env, mc)?;
-
-        let lambda = Gc::new(
-            mc,
-            crate::value::Lambda::new(params, body.to_vec(), captured),
-        );
-        Ok((lambda, lambda_args))
+        Ok((params, body.to_vec(), lambda_args))
     }
 
     match args {
         // Named let: (let name ((var val) ...) body...)
-        [name_expr, bindings_gc, rest @ ..] if matches!(&**name_expr, Expression::Variable(_)) => {
-            if let (Expression::Variable(name), Expression::List(bindings)) =
+        [name_expr, bindings_gc, rest @ ..] if matches!(&**name_expr, Expression::Symbol(_)) => {
+            if let (Expression::Symbol(name), Expression::List(bindings)) =
                 (&**name_expr, &**bindings_gc)
             {
                 if rest.is_empty() {
@@ -974,12 +939,22 @@ pub fn let_call<'gc>(
                         args.iter().map(|e| format!("{}", e)).collect(),
                     ));
                 }
-                let (lambda, lambda_args) =
-                    get_lambda_from(env, locals.clone(), mc, Some(name), bindings, rest)?;
-                // Create body_tail_env with the recursive name bound to the lambda itself
-                let mut tail_bindings = HashMap::new();
-                tail_bindings.insert(name.to_string(), Value::Lambda(lambda));
-                let body_tail_env = crate::root::LocalEnv::empty().extend_frame(tail_bindings, mc);
+                let (params, body, lambda_args) =
+                    get_lambda_from(env, locals.clone(), mc, Some(*name), bindings, rest)?;
+                let body_tail_env = env.snapshot_closure_env(locals, mc).extend_bindings(
+                    vec![(
+                        *name,
+                        Value::Lambda(Gc::new(
+                            mc,
+                            crate::value::Lambda::new(params, body, crate::root::LocalEnv::empty()),
+                        )),
+                    )],
+                    false,
+                    mc,
+                );
+                let Some(Value::Lambda(lambda)) = body_tail_env.lookup_symbol(name.id) else {
+                    unreachable!();
+                };
                 // Call with arg_env = locals (outer locals), body_tail_env contains recursion binding
                 crate::value::Lambda::call(&lambda, &lambda_args, env, locals, &body_tail_env, mc)
             } else {
@@ -998,10 +973,13 @@ pub fn let_call<'gc>(
                         args.iter().map(|e| format!("{}", e)).collect(),
                     ));
                 }
-                let (lambda, lambda_args) =
+                let (params, body, lambda_args) =
                     get_lambda_from(env, locals.clone(), mc, None, bindings, rest)?;
-                // body_tail_env is empty for simple let
-                let body_tail_env = crate::root::LocalEnv::empty();
+                let body_tail_env = env.snapshot_closure_env(locals, mc);
+                let lambda = Gc::new(
+                    mc,
+                    crate::value::Lambda::new(params, body, crate::root::LocalEnv::empty()),
+                );
                 crate::value::Lambda::call(&lambda, &lambda_args, env, locals, &body_tail_env, mc)
             } else {
                 Err(LispComputerError::InvalidArguments(
@@ -1068,19 +1046,19 @@ pub fn do_call<'gc>(
             if let (Expression::List(bindings), Expression::List(test)) =
                 (&**bindings_gc, &**test_gc)
             {
-                // Create a new mutable loop frame as extension of current locals
-                let loop_frame_bindings = HashMap::new();
-                let loop_env = locals.extend_frame(loop_frame_bindings, mc);
+                let mut loop_bindings = Vec::new();
                 let mut steps = Vec::new();
                 // Process each binding: evaluate init in outer locals, store step expression
                 for binding in bindings {
                     match &**binding {
                         Expression::List(list) => match list.as_slice() {
                             [var_gc, value_gc, step_expr_gc] => {
-                                if let Expression::Variable(name) = &**var_gc {
+                                if let Expression::Symbol(name) = &**var_gc {
                                     let evaluated = value_gc.eval(env, locals, mc)?;
-                                    loop_env.insert_here(name.clone(), evaluated, mc);
-                                    steps.push((name.clone(), *step_expr_gc));
+                                    let symbol = *name;
+                                    let slot = loop_bindings.len() as u16;
+                                    loop_bindings.push((symbol, evaluated));
+                                    steps.push((slot, *step_expr_gc));
                                 } else {
                                     return Err(LispComputerError::InvalidArguments(
                                         "do".to_string(),
@@ -1103,6 +1081,7 @@ pub fn do_call<'gc>(
                         }
                     }
                 }
+                let loop_env = locals.extend_bindings(loop_bindings, true, mc);
                 // Extract test and result expressions
                 let (test_expr, result_expr) = match test.as_slice() {
                     [test, result] => (*test, *result),
@@ -1123,9 +1102,9 @@ pub fn do_call<'gc>(
                         body.eval(env, &loop_env, mc)?;
                     }
                     // Update loop variables with step expressions (in same loop_env)
-                    for (name, step_expr) in &steps {
+                    for (slot, step_expr) in &steps {
                         let new_value = step_expr.eval(env, &loop_env, mc)?;
-                        loop_env.insert_here(name.clone(), new_value, mc);
+                        loop_env.set_slot_here(*slot, new_value, mc);
                     }
                 }
             } else {
@@ -1177,18 +1156,29 @@ pub fn process_expression_list<'gc>(
     match expressions {
         [] => Ok(Value::Nil),
         [callee, tail @ ..] => match &**callee {
-            Expression::Variable(name) => env.process_variable(name, tail, locals, mc),
-            Expression::List(_) => {
+            Expression::Variable(ResolvedVar::Global(symbol)) => {
+                env.process_symbol(*symbol, tail, locals, mc)
+            }
+            Expression::List(_) | Expression::Variable(ResolvedVar::Local(_)) => {
                 let callee_value = callee.eval(env, locals, mc)?;
                 match callee_value {
-                    Value::Lambda(lambda) => lambda.call(tail, env, locals, locals, mc),
-                    Value::Processor(proc, _name) => proc(tail, env, locals, mc),
+                    Value::Lambda(lambda) => {
+                        let caller_tail = crate::root::LocalEnv {
+                            frame: locals.frame.and_then(|frame| frame.parent),
+                        };
+                        lambda.call(tail, env, locals, &caller_tail, mc)
+                    }
+                    Value::Processor(proc, _symbol) => proc(tail, env, locals, mc),
                     _ => Err(LispComputerError::TypeMismatch1 {
                         operation: "function application".to_string(),
                         left_str: format!("{}", callee_value),
                     }),
                 }
             }
+            Expression::Symbol(_) => Err(LispComputerError::InvalidExpression(format!(
+                "{} is not a valid function expression",
+                callee
+            ))),
             _ => Err(LispComputerError::InvalidExpression(format!(
                 "{} is not a valid function expression",
                 callee

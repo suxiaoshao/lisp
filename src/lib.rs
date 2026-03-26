@@ -14,7 +14,7 @@
 //! let mut arena = GcArena::new(|mc| LispRoot::new(mc));
 //! arena.mutate(|mc, root| {
 //!     // Parse and evaluate a simple expression
-//!     let (_, expr) = parse_expression(mc, "(+ 1 2 3)").unwrap();
+//!     let (_, expr) = parse_expression(mc, root, "(+ 1 2 3)").unwrap();
 //!     let locals = LocalEnv::empty();
 //!     let result = expr.eval(root, &locals, mc).unwrap();
 //!     assert_eq!(format!("{}", result), "6");
@@ -30,7 +30,7 @@
 //!
 //! let mut arena = GcArena::new(|mc| LispRoot::new(mc));
 //! arena.mutate(|mc, _root| {
-//!     let (rem, expr) = parse_expression(mc, "(* 2 3)").unwrap();
+//!     let (rem, expr) = parse_expression(mc, _root, "(* 2 3)").unwrap();
 //!     assert!(rem.is_empty());
 //!     Ok::<(), ()>(())
 //! }).unwrap();
@@ -63,7 +63,7 @@
 //!
 //! let mut arena = GcArena::new(|mc| LispRoot::new(mc));
 //! arena.mutate(|mc, root| {
-//!     let (_, expr) = parse_expression(mc, "(+ 1 \"error\")").unwrap();
+//!     let (_, expr) = parse_expression(mc, root, "(+ 1 \"error\")").unwrap();
 //!     let locals = LocalEnv::empty();
 //!     match expr.eval(root, &locals, mc) {
 //!         Err(LispComputerError::TypeMismatch2 { .. }) => println!("Type error!"),
@@ -101,6 +101,7 @@
 pub use crate::errors::{LispComputerError, LispError};
 pub use crate::parse::{Expression, parse_expression};
 pub use crate::root::{GcArena, LispRoot, LocalEnv};
+pub use crate::symbol::{BuiltinSymbols, LocalSlot, ResolvedVar, SpecialForm, Symbol, SymbolId};
 pub use crate::value::{Lambda, ProcessorFunc, Value};
 pub use gc_arena::Gc;
 
@@ -110,6 +111,7 @@ mod parse;
 pub mod perf_support;
 mod process;
 mod root;
+mod symbol;
 #[allow(dead_code)]
 mod test_utils;
 mod value;

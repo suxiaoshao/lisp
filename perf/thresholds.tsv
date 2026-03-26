@@ -7,7 +7,10 @@ eval_shadow_builtin	env	0	5	true
 parse_symbol_dense	symbol_interning	25	5	true
 parse_nested_forms	symbol_interning	10	5	true
 eval_shadow_builtin	symbol_interning	10	5	true
-eval_closure_chain	symbol_interning	0	5	true
+slot_lookup_chain_64	symbol_interning	20	5	true
+slot_named_let_wide_64	symbol_interning	15	5	true
+slot_do_wide_64	symbol_interning	10	5	true
+slot_closure_deep_capture_64	symbol_interning	0	5	true
 eval_persistent_global_capture	arena	8	5	true
 eval_closure_chain	arena	8	5	true
 eval_do_loop	arena	0	5	true

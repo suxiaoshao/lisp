@@ -64,11 +64,11 @@ jobs:
       - name: Capture base performance
         if: ${{ steps.bootstrap.outputs.bootstrap == 'false' }}
         working-directory: base
-        run: cargo run --release --bin perf -- capture --output ../perf-artifacts/base.tsv
+        run: cargo run --release --bin perf -- capture --output ../perf-artifacts/base.tsv --stage $PERF_ACTIVE_STAGE
 
       - name: Capture head performance
         working-directory: head
-        run: cargo run --release --bin perf -- capture --output ../perf-artifacts/head.tsv
+        run: cargo run --release --bin perf -- capture --output ../perf-artifacts/head.tsv --stage $PERF_ACTIVE_STAGE
 
       - name: Compare base and head
         if: ${{ steps.bootstrap.outputs.bootstrap == 'false' }}
@@ -90,7 +90,7 @@ jobs:
 
       - name: Run Criterion benchmarks
         working-directory: head
-        run: cargo bench --bench perf_eval
+        run: cargo run --release --bin perf -- bench --stage $PERF_ACTIVE_STAGE
 
       - name: Upload performance artifacts
         uses: actions/upload-artifact@v4

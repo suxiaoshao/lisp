@@ -19,6 +19,8 @@ use gc_arena::Gc;
 use gc_arena_derive::Collect;
 use std::fmt::Display;
 
+use crate::Symbol;
+
 pub use lambda::Lambda;
 
 /// Function pointer type for built-in operations.
@@ -63,7 +65,7 @@ pub type ProcessorFunc = for<'gc, 'a> fn(
 /// - `Boolean(bool)`: Boolean truth values (`#t` or `#f`)
 /// - `Nil`: The empty/nil value (only falsy value besides `#f`)
 /// - `Lambda(Gc<Lambda>)`: A user-defined closure
-/// - `Processor(ProcessorFunc, &'static str)`: A built-in function or special form
+/// - `Processor(ProcessorFunc, Symbol)`: A built-in function or special form
 #[derive(Debug, Clone, Collect)]
 #[collect(no_drop)]
 pub enum Value<'gc> {
@@ -79,8 +81,8 @@ pub enum Value<'gc> {
     Lambda(Gc<'gc, Lambda<'gc>>),
     /// A built-in function or special form.
     ///
-    /// The `&'static str` stores the function name for debugging/display.
-    Processor(#[collect(require_static)] ProcessorFunc, &'static str),
+    /// The `Symbol` stores the function name for display and equality.
+    Processor(#[collect(require_static)] ProcessorFunc, Symbol<'gc>),
 }
 
 impl<'gc> PartialEq for Value<'gc> {
@@ -91,7 +93,9 @@ impl<'gc> PartialEq for Value<'gc> {
             (Value::Boolean(a), Value::Boolean(b)) => a == b,
             (Value::Nil, Value::Nil) => true,
             (Value::Lambda(a), Value::Lambda(b)) => a == b,
-            (Value::Processor(_, name_a), Value::Processor(_, name_b)) => name_a == name_b,
+            (Value::Processor(_, symbol_a), Value::Processor(_, symbol_b)) => {
+                symbol_a.id == symbol_b.id
+            }
             _ => false,
         }
     }
@@ -105,7 +109,7 @@ impl<'gc> Display for Value<'gc> {
             Value::Boolean(b) => write!(f, "{}", b),
             Value::Nil => write!(f, "nil"),
             Value::Lambda(l) => write!(f, "<lambda>:{}", l),
-            Value::Processor(_, name) => write!(f, "<{}>", name),
+            Value::Processor(_, symbol) => write!(f, "<{}>", &*symbol.name),
         }
     }
 }

@@ -11,14 +11,16 @@
 //! in the current environment and their values are stored in the closure's
 //! `captured` frame. This ensures lexical (not dynamic) scoping.
 
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Display,
+use std::{collections::HashSet, fmt::Display};
+
+use crate::{
+    errors::LispComputerError,
+    parse::Expression,
+    root::LocalEnv,
+    symbol::{ResolvedVar, Symbol},
+    value::Value,
 };
 
-use crate::{errors::LispComputerError, parse::Expression, root::LocalEnv, value::Value};
-
-use gc_arena::lock::RefLock;
 use gc_arena::{Gc, Mutation};
 use gc_arena_derive::Collect;
 
@@ -43,7 +45,7 @@ use gc_arena_derive::Collect;
 #[collect(no_drop)]
 pub struct Lambda<'gc> {
     /// Parameter names (in order).
-    params: Vec<String>,
+    params: Vec<Symbol<'gc>>,
     /// Body expressions to evaluate.
     body: Vec<Gc<'gc, Expression<'gc>>>,
     /// Captured free variables from the closure's defining environment.
@@ -52,11 +54,19 @@ pub struct Lambda<'gc> {
     /// the values of variables that are used in the body but not defined as
     /// parameters. They are "frozen" at lambda creation time.
     captured: LocalEnv<'gc>,
+    /// Fixed tail environment for synthetic lambdas such as `let` / named `let`.
+    tail_env: LocalEnv<'gc>,
 }
 
 impl<'gc> Display for Lambda<'gc> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "(lambda ({})(", self.params.join(" "))?;
+        let params = self
+            .params
+            .iter()
+            .map(|symbol| symbol.name.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        write!(f, "(lambda ({params})(")?;
         for expr in &self.body {
             write!(f, " {}", expr)?;
         }
@@ -75,14 +85,24 @@ impl<'gc> Lambda<'gc> {
     /// # Returns
     /// A new `Lambda` instance.
     pub fn new(
-        params: Vec<String>,
+        params: Vec<Symbol<'gc>>,
         body: Vec<Gc<'gc, Expression<'gc>>>,
         captured: LocalEnv<'gc>,
+    ) -> Self {
+        Self::with_tail_env(params, body, captured, LocalEnv::empty())
+    }
+
+    pub fn with_tail_env(
+        params: Vec<Symbol<'gc>>,
+        body: Vec<Gc<'gc, Expression<'gc>>>,
+        captured: LocalEnv<'gc>,
+        tail_env: LocalEnv<'gc>,
     ) -> Self {
         Lambda {
             params,
             body,
             captured,
+            tail_env,
         }
     }
 
@@ -131,39 +151,32 @@ impl<'gc> Lambda<'gc> {
         }
 
         // Step 2: Build parameter bindings
-        let mut param_bindings = HashMap::new();
-        for (param, value) in self.params.iter().zip(arg_values) {
-            param_bindings.insert(param.clone(), value);
-        }
+        let param_bindings: Vec<_> = self
+            .params
+            .iter()
+            .zip(arg_values)
+            .map(|(param, value)| (*param, value))
+            .collect();
 
         // Step 3: Construct environment chain for body:
         // params frame (top) -> captured frame (with parent = body_tail) -> body_tail -> global
-        let mut parent = body_tail_env.frame;
-
-        // If we have captured frame, create a new frame with same bindings and parent = current tail
-        if let Some(captured_frame) = self.captured.frame {
-            let new_captured_frame = Gc::new(
-                mc,
-                crate::root::EnvFrame {
-                    parent,
-                    bindings: captured_frame.bindings,
-                },
-            );
-            parent = Some(new_captured_frame);
-        }
-
-        // Create the parameter frame with its parent set to the chain we built
-        let param_frame = Gc::new(
-            mc,
-            crate::root::EnvFrame {
-                parent,
-                bindings: Gc::new(mc, RefLock::new(param_bindings)),
-            },
-        );
-
-        let body_env = crate::root::LocalEnv {
-            frame: Some(param_frame),
+        let tail_env = if self.tail_env.frame.is_some() {
+            &self.tail_env
+        } else {
+            body_tail_env
         };
+        let parent = self.captured.snapshot_with_tail(tail_env.frame, mc).frame;
+
+        let param_layout = Gc::new(
+            mc,
+            crate::root::FrameLayout::new(
+                param_bindings.iter().map(|(symbol, _)| *symbol).collect(),
+                false,
+            ),
+        );
+        let param_values = param_bindings.into_iter().map(|(_, value)| value).collect();
+        let body_env =
+            crate::root::LocalEnv { frame: parent }.extend_slots(param_layout, param_values, mc);
 
         // Step 4: Evaluate body expressions sequentially
         let mut result = Value::Nil;
@@ -208,130 +221,17 @@ impl<'gc> Lambda<'gc> {
         free: &mut HashSet<String>,
     ) {
         match expr {
-            Expression::Number(_) | Expression::String(_) => {}
-            Expression::Variable(name) => {
-                if !bound.contains(name) {
-                    free.insert(name.clone());
+            Expression::Number(_) | Expression::String(_) | Expression::Symbol(_) => {}
+            Expression::Variable(ResolvedVar::Global(symbol)) => {
+                let name = symbol.name.to_string();
+                if !bound.contains(&name) {
+                    free.insert(name);
                 }
             }
+            Expression::Variable(ResolvedVar::Local(_)) => {}
             Expression::List(exprs) => {
-                if let Some((first, rest)) = exprs.split_first() {
-                    match &**first {
-                        Expression::Variable(var_name) => {
-                            match var_name.as_str() {
-                                "lambda" => {
-                                    // (lambda (params) body...)
-                                    if let Some(params_gc) = rest.first() {
-                                        if let Expression::List(params) = &**params_gc {
-                                            let param_names: HashSet<String> = params
-                                                .iter()
-                                                .filter_map(|p| match &**p {
-                                                    Expression::Variable(var) => Some(var.clone()),
-                                                    _ => None,
-                                                })
-                                                .collect();
-                                            let mut new_bound = bound.clone();
-                                            new_bound.extend(param_names);
-                                            // Process body expressions (rest[1..])
-                                            for body_expr in rest.iter().skip(1) {
-                                                Self::collect_free_vars(
-                                                    body_expr, &new_bound, free,
-                                                );
-                                            }
-                                        } else {
-                                            // malformed lambda, process normally
-                                            for e in rest {
-                                                Self::collect_free_vars(e, bound, free);
-                                            }
-                                        }
-                                    } else {
-                                        // no params, nothing
-                                    }
-                                }
-                                "let" => {
-                                    let (recursive_name, bindings, body) = match rest {
-                                        [name_gc, bindings_gc, body @ ..]
-                                            if matches!(&**name_gc, Expression::Variable(_))
-                                                && matches!(
-                                                    &**bindings_gc,
-                                                    Expression::List(_)
-                                                ) =>
-                                        {
-                                            if let (
-                                                Expression::Variable(name),
-                                                Expression::List(bindings),
-                                            ) = (&**name_gc, &**bindings_gc)
-                                            {
-                                                (Some(name), bindings, body)
-                                            } else {
-                                                unreachable!()
-                                            }
-                                        }
-                                        [bindings_gc, body @ ..]
-                                            if matches!(&**bindings_gc, Expression::List(_)) =>
-                                        {
-                                            if let Expression::List(bindings) = &**bindings_gc {
-                                                (None, bindings, body)
-                                            } else {
-                                                unreachable!()
-                                            }
-                                        }
-                                        _ => {
-                                            for e in rest {
-                                                Self::collect_free_vars(e, bound, free);
-                                            }
-                                            return;
-                                        }
-                                    };
-
-                                    let mut new_bound = bound.clone();
-                                    if let Some(name) = recursive_name {
-                                        new_bound.insert(name.clone());
-                                    }
-
-                                    for binding in bindings {
-                                        if let Expression::List(binding_list) = &**binding {
-                                            match binding_list.as_slice() {
-                                                [var_expr, value_expr] => {
-                                                    Self::collect_free_vars(
-                                                        value_expr, bound, free,
-                                                    );
-                                                    if let Expression::Variable(var_name) =
-                                                        &**var_expr
-                                                    {
-                                                        new_bound.insert(var_name.clone());
-                                                    }
-                                                }
-                                                _ => {
-                                                    for e in binding_list {
-                                                        Self::collect_free_vars(e, bound, free);
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            Self::collect_free_vars(binding, bound, free);
-                                        }
-                                    }
-
-                                    for body_expr in body {
-                                        Self::collect_free_vars(body_expr, &new_bound, free);
-                                    }
-                                }
-                                _ => {
-                                    // Not a binding special form, process all subexpressions normally
-                                    for e in exprs {
-                                        Self::collect_free_vars(e, bound, free);
-                                    }
-                                }
-                            }
-                        }
-                        _ => {
-                            // First element not a variable, process all subexpressions normally
-                            for e in exprs {
-                                Self::collect_free_vars(e, bound, free);
-                            }
-                        }
-                    }
+                for expr in exprs {
+                    Self::collect_free_vars(expr, bound, free);
                 }
             }
         }

@@ -5,6 +5,7 @@ use std::process::Command;
 
 use lisp::perf_support::{
     PerfResult, PerfScenario, PerfScenarioKind, PerfStage, all_scenarios, capture_scenario,
+    filtered_scenarios,
 };
 
 fn main() {
@@ -47,6 +48,7 @@ fn usage() -> String {
 fn capture_command(args: &[String]) -> Result<(), String> {
     let mut output = None;
     let mut filter = None;
+    let mut stage = None;
     let mut index = 0;
 
     while index < args.len() {
@@ -59,13 +61,20 @@ fn capture_command(args: &[String]) -> Result<(), String> {
                 index += 1;
                 filter = args.get(index).cloned();
             }
+            "--stage" => {
+                index += 1;
+                stage = Some(parse_stage(args.get(index).ok_or_else(|| {
+                    "capture requires a value after --stage".to_string()
+                })?)?);
+            }
             other => return Err(format!("unknown capture argument: {other}")),
         }
         index += 1;
     }
 
     let output = output.ok_or_else(|| "capture requires --output <path>".to_string())?;
-    let scenarios = filtered_scenarios(filter.as_deref())?;
+    let stage = stage.ok_or_else(|| "capture requires --stage <stage>".to_string())?;
+    let scenarios = matching_scenarios(Some(stage), filter.as_deref())?;
     let mut lines =
         vec!["scenario_id\tstage\tkind\tnanos_total\titerations\tnanos_per_iter".to_string()];
 
@@ -142,18 +151,38 @@ fn compare_command(args: &[String]) -> Result<(), String> {
 }
 
 fn bench_command(args: &[String]) -> Result<(), String> {
-    let filter = if args.len() == 2 && args[0] == "--filter" {
-        Some(args[1].clone())
-    } else if args.is_empty() {
-        None
-    } else {
-        return Err("bench accepts only optional --filter <pattern>".to_string());
-    };
+    let mut filter = None;
+    let mut stage = None;
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--filter" => {
+                index += 1;
+                filter = args.get(index).cloned();
+            }
+            "--stage" => {
+                index += 1;
+                stage = Some(
+                    args.get(index)
+                        .cloned()
+                        .ok_or_else(|| "bench requires a value after --stage".to_string())?,
+                );
+            }
+            other => return Err(format!("unknown bench argument: {other}")),
+        }
+        index += 1;
+    }
+
+    let stage = stage.ok_or_else(|| "bench requires --stage <stage>".to_string())?;
+    let parsed_stage = parse_stage(&stage)?;
+    matching_scenarios(Some(parsed_stage), filter.as_deref())?;
 
     let mut command = Command::new("cargo");
     command.args(["bench", "--bench", "perf_eval"]);
+    command.env("LISP_PERF_STAGE", stage);
     if let Some(filter) = filter {
-        command.arg("--").arg(filter);
+        command.env("LISP_PERF_FILTER", filter);
     }
 
     let status = command.status().map_err(|err| err.to_string())?;
@@ -211,36 +240,23 @@ fn ci_command(args: &[String]) -> Result<(), String> {
         "--markdown-out".to_string(),
         summary_path.display().to_string(),
         "--stage".to_string(),
-        stage,
+        stage.clone(),
     ];
     compare_command(&compare_args)?;
-    bench_command(&[])
+    bench_command(&["--stage".to_string(), stage])
 }
 
-fn filtered_scenarios(filter: Option<&str>) -> Result<Vec<&'static PerfScenario>, String> {
-    let scenarios: Vec<&'static PerfScenario> = all_scenarios()
-        .iter()
-        .filter(|scenario| match filter {
-            Some(filter) => glob_matches(filter, scenario.id),
-            None => true,
-        })
-        .collect();
+fn matching_scenarios(
+    stage: Option<PerfStage>,
+    filter: Option<&str>,
+) -> Result<Vec<&'static PerfScenario>, String> {
+    let scenarios = filtered_scenarios(stage, filter);
 
     if scenarios.is_empty() {
         Err("no scenarios matched filter".to_string())
     } else {
         Ok(scenarios)
     }
-}
-
-fn glob_matches(pattern: &str, value: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-    if let Some((prefix, suffix)) = pattern.split_once('*') {
-        return value.starts_with(prefix) && value.ends_with(suffix);
-    }
-    value.contains(pattern)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -567,8 +583,17 @@ mod tests {
 
     #[test]
     fn glob_matches_supports_contains_and_star() {
-        assert!(glob_matches("closure", "eval_closure_chain"));
-        assert!(glob_matches("eval_*", "eval_closure_chain"));
-        assert!(!glob_matches("parse_*", "eval_closure_chain"));
+        assert!(lisp::perf_support::glob_matches(
+            "closure",
+            "eval_closure_chain"
+        ));
+        assert!(lisp::perf_support::glob_matches(
+            "eval_*",
+            "eval_closure_chain"
+        ));
+        assert!(!lisp::perf_support::glob_matches(
+            "parse_*",
+            "eval_closure_chain"
+        ));
     }
 }

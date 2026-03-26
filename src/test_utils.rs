@@ -25,7 +25,7 @@ use crate::{GcArena, LispComputerError, parse_expression, root::LocalEnv};
 /// use lisp::{parse_expression, GcArena, Value, LocalEnv};
 /// let mut arena = GcArena::new(|mc| lisp::LispRoot::new(mc));
 /// arena.mutate(|mc, root| {
-///     let (_, expr) = parse_expression(mc, "(+ 1 2)").unwrap();
+///     let (_, expr) = parse_expression(mc, root, "(+ 1 2)").unwrap();
 ///     let locals = LocalEnv::empty();
 ///     let value = expr.eval(root, &locals, mc).unwrap();
 ///     assert_eq!(format!("{}", value), "3");
@@ -42,7 +42,7 @@ pub fn eval_str<'gc>(
     arena: &'gc mut GcArena<'gc>,
 ) -> Result<String, LispComputerError> {
     arena.mutate(|mc, root| -> Result<String, LispComputerError> {
-        let (_, expr) = parse_expression(mc, input)
+        let (_, expr) = parse_expression(mc, root, input)
             .map_err(|_| LispComputerError::InvalidExpression("parse error".to_string()))?;
         let locals = LocalEnv::empty();
         let value = expr.eval(root, &locals, mc)?;

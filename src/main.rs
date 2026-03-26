@@ -33,8 +33,8 @@ fn main() -> Result<(), LispError> {
                 rl.add_history_entry(line.as_str())?;
 
                 let result: Result<String, LispError> = arena.mutate(|mc, root| {
-                    let (_, expression) =
-                        lisp::parse_expression(mc, &line).map_err(|_| LispError::InvalidInput)?;
+                    let (_, expression) = lisp::parse_expression(mc, root, &line)
+                        .map_err(|_| LispError::InvalidInput)?;
                     println!("{expression}");
                     let locals = LocalEnv::empty();
                     let value = expression.eval(root, &locals, mc)?;

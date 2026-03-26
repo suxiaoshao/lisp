@@ -21,6 +21,19 @@ impl PerfStage {
     }
 }
 
+impl std::str::FromStr for PerfStage {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "env" => Ok(PerfStage::Env),
+            "symbol_interning" => Ok(PerfStage::SymbolInterning),
+            "arena" => Ok(PerfStage::Arena),
+            other => Err(format!("unknown stage: {other}")),
+        }
+    }
+}
+
 impl Display for PerfStage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
@@ -188,6 +201,7 @@ static SCENARIOS: LazyLock<Vec<PerfScenario>> = LazyLock::new(|| {
 
     for width in [16usize, 64, 128] {
         scenarios.extend(env_stress_scenarios(width));
+        scenarios.extend(slot_stress_scenarios(width));
     }
 
     scenarios
@@ -195,6 +209,20 @@ static SCENARIOS: LazyLock<Vec<PerfScenario>> = LazyLock::new(|| {
 
 pub fn all_scenarios() -> &'static [PerfScenario] {
     SCENARIOS.as_slice()
+}
+
+pub fn filtered_scenarios(
+    stage: Option<PerfStage>,
+    filter: Option<&str>,
+) -> Vec<&'static PerfScenario> {
+    all_scenarios()
+        .iter()
+        .filter(|scenario| stage.is_none_or(|stage| scenario.stage == stage))
+        .filter(|scenario| match filter {
+            Some(filter) => glob_matches(filter, scenario.id),
+            None => true,
+        })
+        .collect()
 }
 
 fn env_stress_scenarios(width: usize) -> Vec<PerfScenario> {
@@ -252,6 +280,47 @@ fn env_stress_scenarios(width: usize) -> Vec<PerfScenario> {
             source: leak_string(capture_sparse_use(width)),
             warmup_iters: 8,
             measure_iters: iterations_for(width, 192, 96, 48),
+        },
+    ]
+}
+
+fn slot_stress_scenarios(width: usize) -> Vec<PerfScenario> {
+    vec![
+        PerfScenario {
+            id: leak_string(format!("slot_closure_deep_capture_{width}")),
+            stage: PerfStage::SymbolInterning,
+            kind: PerfScenarioKind::EvalFresh,
+            setup: EMPTY_SETUP,
+            source: leak_string(closure_deep_capture(width)),
+            warmup_iters: 8,
+            measure_iters: iterations_for(width, 256, 128, 64),
+        },
+        PerfScenario {
+            id: leak_string(format!("slot_lookup_chain_{width}")),
+            stage: PerfStage::SymbolInterning,
+            kind: PerfScenarioKind::EvalFresh,
+            setup: EMPTY_SETUP,
+            source: leak_string(lookup_chain_deep(width)),
+            warmup_iters: 8,
+            measure_iters: iterations_for(width, 192, 96, 48),
+        },
+        PerfScenario {
+            id: leak_string(format!("slot_named_let_wide_{width}")),
+            stage: PerfStage::SymbolInterning,
+            kind: PerfScenarioKind::EvalFresh,
+            setup: EMPTY_SETUP,
+            source: leak_string(named_let_wide(width, 200)),
+            warmup_iters: 4,
+            measure_iters: iterations_for(width, 64, 32, 16),
+        },
+        PerfScenario {
+            id: leak_string(format!("slot_do_wide_{width}")),
+            stage: PerfStage::SymbolInterning,
+            kind: PerfScenarioKind::EvalFresh,
+            setup: EMPTY_SETUP,
+            source: leak_string(do_wide(width, 200)),
+            warmup_iters: 4,
+            measure_iters: iterations_for(width, 64, 32, 16),
         },
     ]
 }
@@ -388,6 +457,16 @@ fn sparse_indices(width: usize) -> [usize; 3] {
     [1, width / 2, width]
 }
 
+pub fn glob_matches(pattern: &str, value: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some((prefix, suffix)) = pattern.split_once('*') {
+        return value.starts_with(prefix) && value.ends_with(suffix);
+    }
+    value.contains(pattern)
+}
+
 pub fn capture_scenario(scenario: &PerfScenario) -> Result<PerfResult, PerfError> {
     for _ in 0..scenario.warmup_iters {
         run_scenario_once(scenario)?;
@@ -417,8 +496,8 @@ pub fn run_scenario_once(scenario: &PerfScenario) -> Result<(), PerfError> {
 
 pub fn run_parse_scenario(scenario: &PerfScenario) -> Result<(), PerfError> {
     let arena = GcArena::new(|mc| LispRoot::new(mc));
-    arena.mutate(|mc, _root| -> Result<(), PerfError> {
-        let (remaining, _expr) = parse_expression(mc, scenario.source)
+    arena.mutate(|mc, root| -> Result<(), PerfError> {
+        let (remaining, _expr) = parse_expression(mc, root, scenario.source)
             .map_err(|_| PerfError::Parse(scenario.id.to_string()))?;
         if !remaining.is_empty() {
             return Err(PerfError::Parse(format!(
@@ -462,7 +541,7 @@ fn eval_expression<'gc>(
     input: &str,
 ) -> Result<String, PerfError> {
     let (remaining, expr) =
-        parse_expression(mc, input).map_err(|_| PerfError::Parse(input.to_string()))?;
+        parse_expression(mc, root, input).map_err(|_| PerfError::Parse(input.to_string()))?;
     if !remaining.is_empty() {
         return Err(PerfError::Parse(format!(
             "expression left trailing input: {remaining}"
