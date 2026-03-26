@@ -28,11 +28,12 @@ pub use lambda::Lambda;
 ///
 /// # Type Parameters
 /// - `'gc`: GC arena lifetime
+/// - `'a`: Lifetime of the locals reference (can be any lifetime shorter than `'gc`)
 ///
 /// # Arguments
 /// - `args`: Unevaluated argument expressions (AST nodes)
 /// - `env`: Global environment (`LispRoot`)
-/// - `variables`: Local variable bindings from surrounding scope
+/// - `locals`: Local variable environment chain (borrowed, lifetime `'a`)
 /// - `mc`: GC mutation context for allocation
 ///
 /// # Returns
@@ -43,10 +44,10 @@ pub use lambda::Lambda;
 /// Built-in functions receive unevaluated arguments and must evaluate them
 /// as needed. Special forms may evaluate only some arguments (lazy evaluation).
 /// The function must be `'static` (no captured non-static environment).
-pub type ProcessorFunc = for<'gc> fn(
+pub type ProcessorFunc = for<'gc, 'a> fn(
     args: &[Gc<'gc, crate::parse::Expression<'gc>>],
     env: &'gc crate::root::LispRoot<'gc>,
-    variables: &std::collections::HashMap<String, Value<'gc>>,
+    locals: &'a crate::root::LocalEnv<'gc>,
     mc: &'gc gc_arena::Mutation<'gc>,
 ) -> Result<Value<'gc>, crate::errors::LispComputerError>;
 

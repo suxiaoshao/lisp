@@ -9,15 +9,16 @@
 //! Closures capture their defining environment. When a lambda is created,
 //! all free variables (variables not in the parameter list) are looked up
 //! in the current environment and their values are stored in the closure's
-//! `captured` map. This ensures lexical (not dynamic) scoping.
+//! `captured` frame. This ensures lexical (not dynamic) scoping.
 
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
 };
 
-use crate::{errors::LispComputerError, parse::Expression, value::Value};
+use crate::{errors::LispComputerError, parse::Expression, root::LocalEnv, value::Value};
 
+use gc_arena::lock::RefLock;
 use gc_arena::{Gc, Mutation};
 use gc_arena_derive::Collect;
 
@@ -26,10 +27,10 @@ use gc_arena_derive::Collect;
 /// A closure consists of:
 /// - `params`: Parameter names
 /// - `body`: List of body expressions (evaluated sequentially)
-/// - `captured`: Free variables captured from the defining environment
+/// - `captured`: Local environment frame containing free variables captured from the closure's defining environment.
 ///
 /// # Memory Management
-/// All fields are GC-allocated (`Gc` or `HashMap` with GC values). The struct
+/// All fields are GC-allocated (`Gc` or `LocalEnv`). The struct
 /// is `#[collect(no_drop)]` because the GC arena manages all lifetimes.
 ///
 /// # Evaluation
@@ -47,9 +48,10 @@ pub struct Lambda<'gc> {
     body: Vec<Gc<'gc, Expression<'gc>>>,
     /// Captured free variables from the closure's defining environment.
     ///
-    /// These are the values of variables that are used in the body but not
-    /// defined as parameters. They are "frozen" at lambda creation time.
-    captured: HashMap<String, Value<'gc>>,
+    /// This is a LocalEnv handle pointing to an environment frame containing
+    /// the values of variables that are used in the body but not defined as
+    /// parameters. They are "frozen" at lambda creation time.
+    captured: LocalEnv<'gc>,
 }
 
 impl<'gc> Display for Lambda<'gc> {
@@ -68,14 +70,14 @@ impl<'gc> Lambda<'gc> {
     /// # Arguments
     /// - `params`: List of parameter names
     /// - `body`: Body expressions (AST nodes)
-    /// - `captured`: Map of free variable names to their captured values
+    /// - `captured`: Local environment frame containing captured free variables
     ///
     /// # Returns
     /// A new `Lambda` instance.
     pub fn new(
         params: Vec<String>,
         body: Vec<Gc<'gc, Expression<'gc>>>,
-        captured: HashMap<String, Value<'gc>>,
+        captured: LocalEnv<'gc>,
     ) -> Self {
         Lambda {
             params,
@@ -91,7 +93,8 @@ impl<'gc> Lambda<'gc> {
     /// # Arguments
     /// - `args`: Unevaluated argument expressions
     /// - `env`: Global environment (for nested lookups if needed)
-    /// - `variables`: Caller's local variables (e.g., from named let recursion)
+    /// - `arg_env`: Environment for evaluating arguments (caller's locals, borrowed)
+    /// - `body_tail_env`: Additional environment to chain after captured frame (for named let recursion, borrowed)
     /// - `mc`: GC mutation context
     ///
     /// # Returns
@@ -100,16 +103,17 @@ impl<'gc> Lambda<'gc> {
     /// - `Err(LispComputerError::NotFoundVariable)`: If an argument evaluation references an unbound variable
     ///
     /// # Evaluation Steps
-    /// 1. Evaluate all arguments in caller's environment
-    /// 2. Check that number of evaluated arguments equals number of parameters
-    /// 3. Create new local scope starting with captured variables
-    /// 4. Bind argument values to parameter names (shadows captured)
-    /// 5. Evaluate body expressions in order, returning the last
+    /// 1. Evaluate all arguments in `arg_env`
+    /// 2. Check arity
+    /// 3. Construct parameter frame (with arg values)
+    /// 4. Build body environment chain: params frame -> captured frame -> body_tail_env -> global env
+    /// 5. Evaluate body expressions sequentially, returning the last
     pub fn call(
         &self,
         args: &[Gc<'gc, Expression<'gc>>],
         env: &'gc crate::root::LispRoot<'gc>,
-        variables: &HashMap<String, Value<'gc>>,
+        arg_env: &crate::root::LocalEnv<'gc>,
+        body_tail_env: &crate::root::LocalEnv<'gc>,
         mc: &'gc Mutation<'gc>,
     ) -> Result<Value<'gc>, LispComputerError> {
         if args.len() != self.params.len() {
@@ -119,19 +123,52 @@ impl<'gc> Lambda<'gc> {
                 args.len(),
             ));
         }
-        // Preserve caller-local bindings (e.g., from named let recursion),
-        // then overlay lexical captures. Arguments can shadow captured vars.
-        let mut new_variables = variables.clone();
-        new_variables.extend(self.captured.clone());
-        // Bind arguments (evaluated), allowing them to shadow captured variables
-        for (param, arg) in self.params.iter().zip(args) {
-            let value = arg.eval(env, variables, mc)?;
-            new_variables.insert(param.to_string(), value);
+
+        // Step 1: Evaluate arguments in arg_env
+        let mut arg_values = Vec::new();
+        for arg in args {
+            arg_values.push(arg.eval(env, arg_env, mc)?);
         }
-        // Evaluate body expressions sequentially, returning the last result
+
+        // Step 2: Build parameter bindings
+        let mut param_bindings = HashMap::new();
+        for (param, value) in self.params.iter().zip(arg_values) {
+            param_bindings.insert(param.clone(), value);
+        }
+
+        // Step 3: Construct environment chain for body:
+        // params frame (top) -> captured frame (with parent = body_tail) -> body_tail -> global
+        let mut parent = body_tail_env.frame;
+
+        // If we have captured frame, create a new frame with same bindings and parent = current tail
+        if let Some(captured_frame) = self.captured.frame {
+            let new_captured_frame = Gc::new(
+                mc,
+                crate::root::EnvFrame {
+                    parent,
+                    bindings: captured_frame.bindings,
+                },
+            );
+            parent = Some(new_captured_frame);
+        }
+
+        // Create the parameter frame with its parent set to the chain we built
+        let param_frame = Gc::new(
+            mc,
+            crate::root::EnvFrame {
+                parent,
+                bindings: Gc::new(mc, RefLock::new(param_bindings)),
+            },
+        );
+
+        let body_env = crate::root::LocalEnv {
+            frame: Some(param_frame),
+        };
+
+        // Step 4: Evaluate body expressions sequentially
         let mut result = Value::Nil;
         for expr in &self.body {
-            result = expr.eval(env, &new_variables, mc)?;
+            result = expr.eval(env, &body_env, mc)?;
         }
         Ok(result)
     }

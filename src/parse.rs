@@ -13,7 +13,6 @@
 
 pub mod string;
 
-use std::collections::HashMap;
 use std::fmt::Display;
 
 use crate::{
@@ -89,7 +88,7 @@ impl<'gc> Expression<'gc> {
     ///
     /// # Arguments
     /// - `env`: The global environment (`LispRoot`)
-    /// - `variables`: Local variable bindings (from closures/let)
+    /// - `locals`: Local variable environment chain (borrowed)
     /// - `mc`: GC mutation context
     ///
     /// # Returns
@@ -98,17 +97,15 @@ impl<'gc> Expression<'gc> {
     pub fn eval(
         &self,
         env: &'gc LispRoot<'gc>,
-        variables: &HashMap<String, Value<'gc>>,
+        locals: &crate::root::LocalEnv<'gc>,
         mc: &'gc Mutation<'gc>,
     ) -> Result<Value<'gc>, LispComputerError> {
         match self {
             Expression::Number(data) => Ok(Value::Number(*data)),
             Expression::Variable(value) => env
-                .get_variable(value, variables)
+                .get_variable(value, locals)
                 .ok_or(LispComputerError::NotFoundVariable(value.to_string())),
-            Expression::List(expressions) => {
-                process_expression_list(expressions, env, variables, mc)
-            }
+            Expression::List(expressions) => process_expression_list(expressions, env, locals, mc),
             Expression::String(s) => Ok(Value::String(*s)),
         }
     }

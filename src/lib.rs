@@ -9,15 +9,14 @@
 //! # Quick Start
 //!
 //! ```
-//! use lisp::{GcArena, LispRoot, parse_expression, Value};
-//! use std::collections::HashMap;
+//! use lisp::{GcArena, LispRoot, parse_expression, Value, LocalEnv};
 //!
 //! let mut arena = GcArena::new(|mc| LispRoot::new(mc));
 //! arena.mutate(|mc, root| {
 //!     // Parse and evaluate a simple expression
 //!     let (_, expr) = parse_expression(mc, "(+ 1 2 3)").unwrap();
-//!     let vars = HashMap::new();
-//!     let result = expr.eval(root, &vars, mc).unwrap();
+//!     let locals = LocalEnv::empty();
+//!     let result = expr.eval(root, &locals, mc).unwrap();
 //!     assert_eq!(format!("{}", result), "6");
 //!     Ok::<(), ()>(())
 //! }).unwrap();
@@ -60,13 +59,13 @@
 //!
 //! ## Error Handling
 //! ```
-//! use lisp::{parse_expression, GcArena, LispRoot, LispComputerError};
+//! use lisp::{parse_expression, GcArena, LispRoot, LispComputerError, LocalEnv};
 //!
 //! let mut arena = GcArena::new(|mc| LispRoot::new(mc));
 //! arena.mutate(|mc, root| {
 //!     let (_, expr) = parse_expression(mc, "(+ 1 \"error\")").unwrap();
-//!     let vars = std::collections::HashMap::new();
-//!     match expr.eval(root, &vars, mc) {
+//!     let locals = LocalEnv::empty();
+//!     match expr.eval(root, &locals, mc) {
 //!         Err(LispComputerError::TypeMismatch2 { .. }) => println!("Type error!"),
 //!         _ => {}
 //!     }
@@ -101,7 +100,7 @@
 // Re-export core types and functions for convenient access
 pub use crate::errors::{LispComputerError, LispError};
 pub use crate::parse::{Expression, parse_expression};
-pub use crate::root::{GcArena, LispRoot};
+pub use crate::root::{GcArena, LispRoot, LocalEnv};
 pub use crate::value::{Lambda, ProcessorFunc, Value};
 pub use gc_arena::Gc;
 

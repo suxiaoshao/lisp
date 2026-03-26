@@ -3,10 +3,8 @@
 //! This module provides an interactive REPL for the Lisp interpreter using
 //! the `rustyline` library for line editing and history support.
 
-use lisp::GcArena;
-use lisp::LispError;
+use lisp::{GcArena, LispError, LocalEnv};
 use rustyline::{DefaultEditor, error::ReadlineError};
-use std::collections::HashMap;
 
 /// Main entry point for the Lisp REPL.
 ///
@@ -38,8 +36,8 @@ fn main() -> Result<(), LispError> {
                     let (_, expression) =
                         lisp::parse_expression(mc, &line).map_err(|_| LispError::InvalidInput)?;
                     println!("{expression}");
-                    let vars = HashMap::new();
-                    let value = expression.eval(root, &vars, mc)?;
+                    let locals = LocalEnv::empty();
+                    let value = expression.eval(root, &locals, mc)?;
                     Ok(format!("{}", value))
                 });
 

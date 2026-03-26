@@ -3,8 +3,7 @@
 //! This module provides helper functions for testing, primarily `eval_str`
 //! which allows evaluating expressions in a fresh or provided arena.
 
-use crate::{GcArena, LispComputerError, parse_expression};
-use std::collections::HashMap;
+use crate::{GcArena, LispComputerError, parse_expression, root::LocalEnv};
 
 /// Evaluate a Lisp expression from a string in the given arena.
 ///
@@ -23,20 +22,19 @@ use std::collections::HashMap;
 ///
 /// # Example
 /// ```
-/// use lisp::{parse_expression, GcArena, Value};
-/// use std::collections::HashMap;
+/// use lisp::{parse_expression, GcArena, Value, LocalEnv};
 /// let mut arena = GcArena::new(|mc| lisp::LispRoot::new(mc));
 /// arena.mutate(|mc, root| {
 ///     let (_, expr) = parse_expression(mc, "(+ 1 2)").unwrap();
-///     let vars = HashMap::new();
-///     let value = expr.eval(root, &vars, mc).unwrap();
+///     let locals = LocalEnv::empty();
+///     let value = expr.eval(root, &locals, mc).unwrap();
 ///     assert_eq!(format!("{}", value), "3");
 ///     Ok::<(), ()>(())
 /// }).unwrap();
 /// ```
 ///
 /// # Notes
-/// - Uses empty local `variables` map (no closure environment)
+/// - Uses empty local `LocalEnv` (no closure environment)
 /// - All errors are converted to `LispComputerError` (parse errors become `InvalidExpression`)
 /// - The arena is mutated via `arena.mutate()`
 pub fn eval_str<'gc>(
@@ -46,8 +44,8 @@ pub fn eval_str<'gc>(
     arena.mutate(|mc, root| -> Result<String, LispComputerError> {
         let (_, expr) = parse_expression(mc, input)
             .map_err(|_| LispComputerError::InvalidExpression("parse error".to_string()))?;
-        let vars = HashMap::new();
-        let value = expr.eval(root, &vars, mc)?;
+        let locals = LocalEnv::empty();
+        let value = expr.eval(root, &locals, mc)?;
         Ok(format!("{}", value))
     })
 }
