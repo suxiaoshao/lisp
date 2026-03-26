@@ -7,6 +7,86 @@
 - 第二阶段允许调整公开 parser API，直接把 interner 接入 parse 路径，不做兼容包装层。
 - 第三阶段是 profile-gated：只有在 env + interning 完成后仍能证明分配/扫描是热点时才做。
 
+## Performance Measurement and Benchmark Infrastructure
+
+### Goals
+- 性能测量基础设施必须同时服务三件事：本地比较、PR 门槛检查、以及详细 benchmark artifact 归档。
+- 测量结果必须和语义正确性验证分离；`cargo fmt --check`、`cargo test`、`cargo clippy --all-targets --all-features -- -D warnings` 仍然是功能正确性的唯一基线。
+- 性能门槛默认以“同一 runner 上的 base vs head 对比”为准，不维护仓库内静态绝对 baseline。
+
+### Command Surface
+- 性能命令统一通过单个辅助 bin 暴露：
+  - `cargo run --release --bin perf -- list`
+  - `cargo run --release --bin perf -- capture --output <path> [--filter <pattern>]`
+  - `cargo run --release --bin perf -- compare --base <path> --head <path> --thresholds perf/thresholds.tsv --markdown-out <path> --stage <env|symbol_interning|arena>`
+  - `cargo run --release --bin perf -- bench [--filter <pattern>]`
+  - `cargo run --release --bin perf -- ci --base <path> --head <path> --artifacts <dir> --stage <env|symbol_interning|arena>`
+- `capture` 的 TSV 输出是 CI gate 的唯一输入。
+- `compare` 负责 markdown 摘要和 fail/pass 判定。
+- `bench` 只负责调用 Criterion 产出 `target/criterion`。
+- `compare` 和 `ci` 都必须显式接收 `--stage`，避免三阶段门槛被同时套用。
+
+### Scenario Matrix
+- 场景 ID 必须稳定，后续只能追加，不能重命名已有项：
+  - `parse_symbol_dense`
+  - `parse_nested_forms`
+  - `eval_arith_deep`
+  - `eval_closure_chain`
+  - `eval_named_let_loop`
+  - `eval_do_loop`
+  - `eval_shadow_builtin`
+  - `eval_persistent_global_capture`
+- `ParseOnly` 场景每次迭代新建 arena/root，只测 `parse_expression`。
+- `EvalFresh` 场景每次迭代新建 arena/root，测 `parse + eval`。
+- `EvalPersistent` 场景在单个 sample 内复用 arena/root，模拟 REPL 持久状态。
+- 所有场景定义统一放在 `src/perf_support.rs`，禁止 `benches/` 和 `src/bin/perf.rs` 维护独立 workload。
+
+### Local Workflow
+1. 在基线分支运行 `cargo run --release --bin perf -- capture --output /tmp/base.tsv`。
+2. 在目标分支运行 `cargo run --release --bin perf -- capture --output /tmp/head.tsv`。
+3. 运行 `cargo run --release --bin perf -- compare --base /tmp/base.tsv --head /tmp/head.tsv --thresholds perf/thresholds.tsv --markdown-out /tmp/perf-summary.md --stage env`。
+4. 运行 `cargo run --release --bin perf -- bench` 或直接 `cargo bench --bench perf_eval`。
+5. 评审时同时查看 `/tmp/perf-summary.md` 和 `target/criterion`。
+
+### CI Workflow
+- 新增独立 `.github/workflows/perf.yml`，不并入主 CI。
+- 只跑 Ubuntu。
+- 触发方式：
+  - `workflow_dispatch`
+  - 命中核心解释器、benchmark 基础设施和门槛文件的 PR
+- workflow 步骤：
+  - checkout PR base 到独立目录
+  - checkout PR head 到独立目录
+  - 在 base/head 目录分别运行 `cargo run --release --bin perf -- capture`
+  - 在 head 目录运行 `cargo run --release --bin perf -- compare --stage <active-stage>`
+  - 在 head 目录运行 `cargo bench --bench perf_eval`
+  - 上传 `base.tsv`、`head.tsv`、`perf-summary.md` 和 `target/criterion`
+- 当前默认激活阶段是 `env`；推进到 Stage 2 或 Stage 3 时，同步更新 workflow 和文档中的 `--stage`。
+
+### Gate Policy
+- 门槛配置统一存放在 `perf/thresholds.tsv`。
+- Env 阶段默认门槛：
+  - `eval_closure_chain >= 20%`
+  - `eval_named_let_loop >= 15%`
+  - `eval_do_loop >= 10%`
+  - `eval_arith_deep` 最大回退 `5%`
+  - `eval_shadow_builtin` 最大回退 `5%`
+- Symbol interning 阶段默认门槛：
+  - `parse_symbol_dense >= 25%`
+  - `parse_nested_forms >= 10%`
+  - `eval_shadow_builtin >= 10%`
+  - `eval_closure_chain` 最大回退 `5%`
+- Arena 阶段默认门槛：
+  - `eval_persistent_global_capture >= 8%`
+  - `eval_closure_chain >= 8%`
+  - `eval_do_loop` 最大回退 `5%`
+- Stage 3 只有在 Stage 2 后的 Criterion 报表或 profile 仍显示 env frame 分配、hash 查找或 GC/扫描是热点时，才允许启用 Arena 阶段门槛。
+
+### Bootstrap Policy
+- 首个引入 `src/bin/perf.rs`、`criterion`、`perf/thresholds.tsv`、`perf.yml` 的 PR 不做硬门槛失败。
+- 如果 base 分支缺少 `src/bin/perf.rs` 或 `perf/thresholds.tsv`，perf workflow 自动退化为 artifact-only 模式：只生成 head 的 capture 结果和 Criterion 报表，不执行 compare fail/pass。
+- 从基础设施落地后的下一批优化 PR 开始启用硬门槛。
+
 ## Stage 1: Env 结构重构，去掉局部环境全量 clone
 - 在 `root` 模块新增公开类型 `LocalEnv<'gc>`，作为局部环境句柄，替代所有 `&HashMap<String, Value<'gc>>` 参数。
 - `LocalEnv<'gc>` 设计为一个轻量 handle，内部持有 `Option<Gc<'gc, EnvFrame<'gc>>>`。
@@ -122,8 +202,28 @@
   - `do` 的可变 frame 不会影响闭包快照 frame。
   - GC 保活和旧有闭包测试在新布局下全部通过。
 
+## Performance Validation
+- `src/bin/perf.rs` 必须覆盖这些单元测试：
+  - TSV 解析与 round-trip
+  - 门槛文件解析
+  - base/head 比较逻辑
+  - stage 过滤逻辑
+  - markdown 摘要输出
+- `cargo run --release --bin perf -- capture` 的输出必须至少包含：
+  - `scenario_id`
+  - `stage`
+  - `kind`
+  - `nanos_total`
+  - `iterations`
+  - `nanos_per_iter`
+- `target/criterion` 是详细 benchmark artifact，不是门槛判定输入。
+- perf workflow 的 pass/fail 只由 `compare` 决定，不直接解析 Criterion 报表。
+- 现阶段的 compare/gate 默认只启用 `env` 阶段门槛。
+
 ## Assumptions
-- 不新增第三方依赖，尤其不引入 benchmark 或 interning 库。
+- 允许新增 `criterion` 作为唯一 benchmark 框架。
+- 不引入第二套 benchmark 框架。
+- 不引入 `xtask`；所有性能辅助命令统一通过单个 `perf` bin 暴露。
 - 第一阶段允许调整公开 `Expression::eval` / `ProcessorFunc` 相关签名，并新增公开 `LocalEnv<'gc>`。
 - 第二阶段允许破坏性修改公开 parser API。
 - 错误类型保持字符串输出，不把 `SymbolId` 暴露到错误层。

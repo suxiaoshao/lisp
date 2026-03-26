@@ -1,0 +1,13 @@
+scenario_id	stage	min_improve_pct	max_regress_pct	required
+eval_closure_chain	env	20	5	true
+eval_named_let_loop	env	15	5	true
+eval_do_loop	env	10	5	true
+eval_arith_deep	env	0	5	true
+eval_shadow_builtin	env	0	5	true
+parse_symbol_dense	symbol_interning	25	5	true
+parse_nested_forms	symbol_interning	10	5	true
+eval_shadow_builtin	symbol_interning	10	5	true
+eval_closure_chain	symbol_interning	0	5	true
+eval_persistent_global_capture	arena	8	5	true
+eval_closure_chain	arena	8	5	true
+eval_do_loop	arena	0	5	true

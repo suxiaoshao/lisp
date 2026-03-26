@@ -1,0 +1,101 @@
+name: Performance
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - Cargo.toml
+      - src/root.rs
+      - src/process.rs
+      - src/parse.rs
+      - src/value.rs
+      - src/value/lambda.rs
+      - src/bin/perf.rs
+      - src/perf_support.rs
+      - benches/**
+      - perf/**
+      - docs/perf-optimization-plan.md
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  perf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PERF_ACTIVE_STAGE: env
+
+    steps:
+      - name: Checkout head
+        uses: actions/checkout@v4
+        with:
+          path: head
+
+      - name: Checkout base
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Prepare artifact directory
+        run: mkdir -p perf-artifacts
+
+      - name: Detect bootstrap mode
+        id: bootstrap
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "bootstrap=true" >> "$GITHUB_OUTPUT"
+          elif [ ! -f base/src/bin/perf.rs ] || [ ! -f base/perf/thresholds.tsv ]; then
+            echo "bootstrap=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "bootstrap=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Capture base performance
+        if: ${{ steps.bootstrap.outputs.bootstrap == 'false' }}
+        working-directory: base
+        run: cargo run --release --bin perf -- capture --output ../perf-artifacts/base.tsv
+
+      - name: Capture head performance
+        working-directory: head
+        run: cargo run --release --bin perf -- capture --output ../perf-artifacts/head.tsv
+
+      - name: Compare base and head
+        if: ${{ steps.bootstrap.outputs.bootstrap == 'false' }}
+        working-directory: head
+        run: cargo run --release --bin perf -- compare --base ../perf-artifacts/base.tsv --head ../perf-artifacts/head.tsv --thresholds perf/thresholds.tsv --markdown-out ../perf-artifacts/perf-summary.md --stage $PERF_ACTIVE_STAGE
+
+      - name: Bootstrap summary
+        if: ${{ steps.bootstrap.outputs.bootstrap == 'true' }}
+        shell: bash
+        run: |
+          cat > perf-artifacts/perf-summary.md <<'EOF'
+          # Performance Summary
+
+          Bootstrap mode is active.
+
+          The base branch does not yet contain the performance infrastructure, so this run only
+          captured head results and produced Criterion artifacts.
+          EOF
+
+      - name: Run Criterion benchmarks
+        working-directory: head
+        run: cargo bench --bench perf_eval
+
+      - name: Upload performance artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-artifacts
+          path: |
+            perf-artifacts/**
+            head/target/criterion/**

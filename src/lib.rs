@@ -106,6 +106,8 @@ pub use gc_arena::Gc;
 
 mod errors;
 mod parse;
+#[doc(hidden)]
+pub mod perf_support;
 mod process;
 mod root;
 #[allow(dead_code)]
