@@ -6,6 +6,7 @@
 - 语义保持不变：闭包仍是词法作用域、捕获仍是定义时快照、named `let` 的递归绑定仍只在函数体可见、builtin shadowing 行为不变。
 - 第二阶段允许调整公开 parser API，直接把 interner 接入 parse 路径，不做兼容包装层。
 - 第三阶段是 profile-gated：只有在 env + interning 完成后仍能证明分配/扫描是热点时才做。
+- `Stage 1` 已完成，但 benchmark 表明它是“闭包/捕获路径有收益、循环/递归路径有回退”的中间态，不是最终性能形态。
 
 ## Performance Measurement and Benchmark Infrastructure
 
@@ -36,10 +37,21 @@
   - `eval_do_loop`
   - `eval_shadow_builtin`
   - `eval_persistent_global_capture`
+  - `env_closure_deep_capture_{16|64|128}`
+  - `env_closure_fanout_many_functions_{16|64|128}`
+  - `env_lookup_chain_deep_{16|64|128}`
+  - `env_named_let_wide_{16|64|128}`
+  - `env_do_wide_{16|64|128}`
+  - `env_capture_sparse_use_{16|64|128}`
 - `ParseOnly` 场景每次迭代新建 arena/root，只测 `parse_expression`。
 - `EvalFresh` 场景每次迭代新建 arena/root，测 `parse + eval`。
 - `EvalPersistent` 场景在单个 sample 内复用 arena/root，模拟 REPL 持久状态。
 - 所有场景定义统一放在 `src/perf_support.rs`，禁止 `benches/` 和 `src/bin/perf.rs` 维护独立 workload。
+- `env_*` 场景用于放大局部环境重构的收益与回退：
+  - `closure_deep_capture` 和 `closure_fanout_many_functions` 主要观察闭包创建/调用时的环境复制成本
+  - `lookup_chain_deep` 主要观察链式环境查找的额外成本
+  - `named_let_wide` 与 `do_wide` 主要观察循环场景下的 frame 查找与更新成本
+  - `capture_sparse_use` 主要观察“大环境但只使用少量自由变量”时的收益
 
 ### Local Workflow
 1. 在基线分支运行 `cargo run --release --bin perf -- capture --output /tmp/base.tsv`。
@@ -140,6 +152,29 @@
   - test/body/step 均在 loop frame 对应的 `LocalEnv` 中执行
   - step 更新只写当前 loop frame，不改父环境
 
+## Stage 1 Findings and Next-Step Design Guidance
+
+### Measured Env Tradeoffs
+- 最近一次本地 benchmark 对比表明，`Stage 1` 的收益主要集中在 `closure-heavy` 和 `capture-heavy` 场景，不是全路径提速。
+- `env_closure_deep_capture`、`env_closure_fanout_many_functions`、`env_capture_sparse_use` 在 `16/64/128` 三档上都有稳定收益，说明“避免整表 clone”在闭包创建和调用路径上是有效的。
+- `env_lookup_chain_deep` 只有小幅收益或接近平稳，说明链式 `LocalEnv` 本身不是长期性能终态。
+- `env_named_let_wide` 和 `env_do_wide` 在宽环境、长循环场景上有明显回退，说明当前实现把一部分 clone 成本换成了更昂贵的 frame 查找和更新成本。
+- 这些结论只作为后续设计依据，不直接变成新的 CI gate 规则；具体百分比以最近一次本地对比和 `perf` artifact 为准。
+
+### How Other GC Languages Usually Solve This
+- 链式环境 frame 通常只是基础结构，用来保证词法作用域和便宜地创建新作用域，但很少作为长期终态。
+- 成熟实现通常会让闭包只捕获自由变量，而不是捕获整张环境；这比单纯微调 env 链更直接地降低 closure 大小、GC scan 和 lookup 范围。
+- 对会被闭包共享或更新的绑定，常见做法是引入 cell / upvalue，而不是继续把所有局部变量都放在统一的 map/frame 里处理。
+- 运行时变量查找通常会从 `String` key 进一步推进到 interned symbol、lexical address 或 slot index，避免热路径上的字符串哈希和多层 map 查找。
+- 闭包很多的实现通常会走 flat closure / closure conversion，把自由变量压缩到紧凑的 closure env 里，而不是长期依赖宽 env 链。
+- 普通局部变量、被捕获局部变量、全局变量和递归绑定通常会逐步分流到不同表示；“链式 `HashMap<String, Value>` env”更像过渡数据结构。
+
+### Implications for Stage 2 and Stage 3
+- `Stage 2` 不应只停留在 `symbol interning`；它还要为“从字符串查找到 symbol/slot 查找”铺路。
+- `Stage 2` 的设计默认要支持“精确自由变量捕获”，不要假设 closure 会长期依赖宽 `LocalEnv` 链。
+- `Stage 3` 的前置条件不变，但 profile 时必须单独检查 `named let` / `do` 的 lookup 和 frame update 热点，不能只看 closure-heavy 场景。
+- 如果后续还要继续优化 env，优先方向是“精确捕获 + symbol/slot + 语义分流”，而不是继续长期微调 `HashMap` 链本身。
+
 ## Stage 2: Symbol Interning，全链路把 symbol 从 `String` 改成 interned handle
 - 新增 `symbol` 模块，并引入两个类型：
   - `pub struct Symbol<'gc> { id: SymbolId, name: Gc<'gc, String> }`
@@ -228,4 +263,5 @@
 - 第二阶段允许破坏性修改公开 parser API。
 - 错误类型保持字符串输出，不把 `SymbolId` 暴露到错误层。
 - Stage 1 是必须落地的详细实施方案；Stage 2 是紧随其后的确定性方案；Stage 3 只有在 profile 证明有效时才实施。
+- 后续优化默认不把“链式 `HashMap<String, Value>` env”当作长期终态，而是继续向精确捕获、symbol/slot 查找和按语义分流的数据结构推进。
 - 默认验证基线保持为：`cargo fmt --check`、`cargo test`、`cargo clippy --all-targets --all-features -- -D warnings`。
