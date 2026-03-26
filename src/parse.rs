@@ -44,10 +44,6 @@ use nom::{
 /// - `Variable(String)`: A symbol/variable reference (e.g., `x`, `+`, `if`)
 /// - `List(Vec<Gc<Expression>>)`: An S-expression or function call (e.g., `(+ 1 2)`)
 /// - `String(Gc<String>)`: A string literal (e.g., `"hello"`)
-/// - `NamingList(String, Vec<Gc<Expression>>)`: Special form syntax like `name(...)`
-///   (e.g., `lambda`, `let` with naming). This is an intermediate representation
-///   that should be transformed by special form handlers; evaluating it directly
-///   returns `LispComputerError::LetNamingNotReturn`.
 #[derive(Debug, PartialEq, Clone, Collect)]
 #[collect(no_drop)]
 pub enum Expression<'gc> {
@@ -90,7 +86,6 @@ impl<'gc> Expression<'gc> {
     /// - `Variable` → Lookup in environment (errors if unbound)
     /// - `String` → `Value::String`
     /// - `List` → Function application via `process_expression_list`
-    /// - `NamingList` → Error (should be transformed before evaluation)
     ///
     /// # Arguments
     /// - `env`: The global environment (`LispRoot`)
@@ -130,7 +125,7 @@ impl<'gc> Expression<'gc> {
 /// - Strings: `"hello"`, `"multi\nline"`, with escape sequences
 /// - Variables: `x`, `+`, `if`, `lambda` (symbols not starting with digits)
 /// - Lists: `(+ 1 2)`, `(define x 42)`, `(lambda (x) x)`
-/// - Special forms: `(lambda ...)`, `(let ...)` using `NamingList` representation
+/// - Special forms: `(lambda ...)`, `(let ...)`, etc.
 ///
 /// # Arguments
 /// - `mc`: GC mutation context for allocation
@@ -142,9 +137,9 @@ impl<'gc> Expression<'gc> {
 ///
 /// # Example
 /// ```
-/// use lisp::root::GcArena;
-/// use lisp::parse::parse_expression;
-/// let arena = GcArena::new(|mc| lisp::root::LispRoot::new(mc));
+/// use lisp::GcArena;
+/// use lisp::parse_expression;
+/// let arena = GcArena::new(|mc| lisp::LispRoot::new(mc));
 /// arena.mutate(|mc, _root| {
 ///     let (remaining, _expr) = parse_expression(mc, "(+ 1 2)").unwrap();
 ///     assert!(remaining.is_empty());
@@ -220,12 +215,12 @@ fn parse_lisp_variable(input: &str) -> IResult<&str, String> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{errors::LispComputerError, root::GcArena};
+    use crate::{GcArena, LispComputerError};
     use anyhow::Result;
 
     #[test]
     fn parse_expression_inner_test() -> Result<()> {
-        let arena = GcArena::new(|mc| crate::root::LispRoot::new(mc));
+        let arena = GcArena::new(|mc| crate::LispRoot::new(mc));
         arena.mutate(|mc, _root| -> Result<(), LispComputerError> {
             let input = "1 1";
             let (remaining, exprs) = parse_expression_inner(mc, input)
@@ -241,7 +236,7 @@ mod test {
 
     #[test]
     fn parse_expression_test() -> Result<()> {
-        let arena = GcArena::new(|mc| crate::root::LispRoot::new(mc));
+        let arena = GcArena::new(|mc| crate::LispRoot::new(mc));
         arena.mutate(|mc, _root| -> Result<(), LispComputerError> {
             let input = "(+ 1 1)";
             let (remaining, expr) = parse_expression(mc, input)

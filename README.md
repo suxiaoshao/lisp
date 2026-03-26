@@ -654,7 +654,7 @@ arena.mutate(|mc, root| {
 use lisp::{parse_expression, GcArena, LispRoot};
 use std::collections::HashMap;
 
-fn factorial(n: i64) -> Result<i64, lisp::errors::LispComputerError> {
+fn factorial(n: i64) -> Result<i64, lisp::LispComputerError> {
     let mut arena = GcArena::new(|mc| LispRoot::new(mc));
     arena.mutate(|mc, root| {
         // Define factorial function in Lisp
@@ -672,7 +672,7 @@ fn factorial(n: i64) -> Result<i64, lisp::errors::LispComputerError> {
         let (_, call_expr) = parse_expression(mc, &call_code).unwrap();
         let result = call_expr.eval(root, &HashMap::new(), mc)?;
 
-        if let lisp::value::Value::Number(val) = result {
+        if let lisp::Value::Number(val) = result {
             Ok(val as i64)
         } else {
             panic!("Expected number");
@@ -680,7 +680,7 @@ fn factorial(n: i64) -> Result<i64, lisp::errors::LispComputerError> {
     })
 }
 
-fn main() -> Result<(), lisp::errors::LispError> {
+fn main() -> Result<(), lisp::LispError> {
     assert_eq!(factorial(5)?, 120);
     assert_eq!(factorial(6)?, 720);
     assert_eq!(factorial(10)?, 3628800);

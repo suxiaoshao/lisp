@@ -3,7 +3,7 @@
 //! This module provides helper functions for testing, primarily `eval_str`
 //! which allows evaluating expressions in a fresh or provided arena.
 
-use crate::{errors::LispComputerError, parse::parse_expression, root::GcArena};
+use crate::{GcArena, LispComputerError, parse_expression};
 use std::collections::HashMap;
 
 /// Evaluate a Lisp expression from a string in the given arena.
@@ -23,9 +23,9 @@ use std::collections::HashMap;
 ///
 /// # Example
 /// ```
-/// use lisp::{parse::parse_expression, root::GcArena, value::Value};
+/// use lisp::{parse_expression, GcArena, Value};
 /// use std::collections::HashMap;
-/// let mut arena = GcArena::new(|mc| lisp::root::LispRoot::new(mc));
+/// let mut arena = GcArena::new(|mc| lisp::LispRoot::new(mc));
 /// arena.mutate(|mc, root| {
 ///     let (_, expr) = parse_expression(mc, "(+ 1 2)").unwrap();
 ///     let vars = HashMap::new();
