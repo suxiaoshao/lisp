@@ -1,15 +1,14 @@
 //! A Lisp interpreter implemented in Rust.
 //!
-//! This crate provides a complete Lisp interpreter with:
+//! This crate provides the Lisp interpreter core with:
 //! - Garbage collection via `gc-arena`
 //! - Lexical scoping with proper closure capture
 //! - First-class functions and built-in special forms
-//! - A REPL with readline support
 //!
 //! # Quick Start
 //!
 //! ```
-//! use lisp::{GcArena, LispRoot, parse_expression, Value};
+//! use lisp_core::{GcArena, LispRoot, parse_expression, Value};
 //! use std::collections::HashMap;
 //!
 //! let mut arena = GcArena::new(|mc| LispRoot::new(mc));
@@ -27,7 +26,7 @@
 //!
 //! ## Parsing
 //! ```
-//! use lisp::{parse_expression, GcArena, LispRoot};
+//! use lisp_core::{parse_expression, GcArena, LispRoot};
 //!
 //! let mut arena = GcArena::new(|mc| LispRoot::new(mc));
 //! arena.mutate(|mc, _root| {
@@ -39,7 +38,7 @@
 //!
 //! ## Values
 //! ```
-//! use lisp::{Value, GcArena, Gc, LispRoot};
+//! use lisp_core::{Value, GcArena, Gc, LispRoot};
 //!
 //! let mut arena = GcArena::new(|mc| LispRoot::new(mc));
 //! arena.mutate(|mc, _root| {
@@ -60,7 +59,7 @@
 //!
 //! ## Error Handling
 //! ```
-//! use lisp::{parse_expression, GcArena, LispRoot, LispComputerError};
+//! use lisp_core::{parse_expression, GcArena, LispRoot, LispComputerError};
 //!
 //! let mut arena = GcArena::new(|mc| LispRoot::new(mc));
 //! arena.mutate(|mc, root| {
@@ -81,7 +80,7 @@
 //! - [`parse_expression`] for parsing
 //! - [`Expression`] for AST
 //! - [`Value`] and [`Lambda`] for runtime values
-//! - [`LispComputerError`] for error handling
+//! - [`LispComputerError`] for runtime error handling
 //! - [`parse_string`] for string parsing
 //!
 //! # Internal Modules
@@ -93,17 +92,18 @@
 //! - `value`: Internal value types (use `Value`, `Lambda` from root)
 //! - `root`: Internal GC arena root (use `GcArena`, `LispRoot` from root)
 //! - `process`: Internal built-in function implementations
-//! - `errors`: Internal error types (use `LispError`, `LispComputerError` from root)
+//! - `errors`: Internal error types (use `LispComputerError` from root)
 //! - [`parse_string`]: String parsing module (re-exported at root as `parse_string`)
 //!
 //! See the [Re-exports](#reexports) section above for the complete public API.
 
 // Re-export core types and functions for convenient access
-pub use crate::errors::{LispComputerError, LispError};
-pub use crate::parse::{Expression, parse_expression};
+pub use crate::errors::LispComputerError;
+pub use crate::parse::{Expression, parse_expression, parse_program};
 pub use crate::root::{GcArena, LispRoot};
 pub use crate::value::{Lambda, ProcessorFunc, Value};
 pub use gc_arena::Gc;
+use std::collections::HashMap;
 
 mod errors;
 mod parse;
@@ -121,7 +121,7 @@ pub mod parse_string {
     //!
     //! # Example
     //! ```
-    //! use lisp::parse_string::parse_string;
+    //! use lisp_core::parse_string::parse_string;
     //! use nom::error::Error;
     //! let result = parse_string::<Error<&str>>("\"hello\\nworld\"");
     //! assert!(result.is_ok());
@@ -132,7 +132,7 @@ pub mod parse_string {
     //!
     //! # Unicode Example
     //! ```
-    //! use lisp::parse_string::parse_string;
+    //! use lisp_core::parse_string::parse_string;
     //! use nom::error::Error;
     //! let result = parse_string::<Error<&str>>("\"\\u{2764} love\"");
     //! assert!(result.is_ok());
@@ -142,4 +142,59 @@ pub mod parse_string {
 
     // Re-export string parsing functionality
     pub use crate::parse::string::parse_string;
+}
+
+/// Evaluate a full Lisp program consisting of zero or more top-level forms.
+///
+/// Forms are evaluated sequentially in a fresh arena and environment. The
+/// string representation of the final value is returned.
+pub fn eval_program(input: &str) -> Result<String, LispComputerError> {
+    let arena = GcArena::new(|mc| LispRoot::new(mc));
+    arena.mutate(|mc, root| -> Result<String, LispComputerError> {
+        let (remaining, expressions) = parse_program(mc, input)
+            .map_err(|_| LispComputerError::InvalidExpression("parse error".to_string()))?;
+
+        if !remaining.trim().is_empty() {
+            return Err(LispComputerError::InvalidExpression(format!(
+                "unparsed input: {}",
+                remaining.trim()
+            )));
+        }
+
+        let vars = HashMap::new();
+        let mut value = Value::Nil;
+        for expression in expressions {
+            value = expression.eval(root, &vars, mc)?;
+        }
+
+        Ok(value.to_string())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eval_program_runs_multiple_top_level_forms() {
+        assert_eq!(eval_program("(define x 2)\n(+ x 3)"), Ok("5".to_string()));
+    }
+
+    #[test]
+    fn eval_program_runs_single_list_expression() {
+        assert_eq!(
+            eval_program("((lambda (x y) (+ x y)) 2 3)"),
+            Ok("5".to_string())
+        );
+    }
+
+    #[test]
+    fn eval_program_rejects_unparsed_tail() {
+        assert_eq!(
+            eval_program("(+ 1 2))"),
+            Err(LispComputerError::InvalidExpression(
+                "unparsed input: )".to_string()
+            ))
+        );
+    }
 }

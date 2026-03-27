@@ -23,9 +23,9 @@ use std::collections::HashMap;
 ///
 /// # Example
 /// ```
-/// use lisp::{parse_expression, GcArena, Value};
+/// use lisp_core::{parse_expression, GcArena, Value};
 /// use std::collections::HashMap;
-/// let mut arena = GcArena::new(|mc| lisp::LispRoot::new(mc));
+/// let mut arena = GcArena::new(|mc| lisp_core::LispRoot::new(mc));
 /// arena.mutate(|mc, root| {
 ///     let (_, expr) = parse_expression(mc, "(+ 1 2)").unwrap();
 ///     let vars = HashMap::new();

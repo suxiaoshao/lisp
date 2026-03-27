@@ -42,10 +42,14 @@ jobs:
 
       - name: Cargo fmt
         if: ${{ matrix.runs_on == 'ubuntu-latest' }}
-        run: cargo fmt --check
+        run: cargo fmt --check --all
 
       - name: Cargo test
         run: cargo test --locked
+
+      - name: Cargo check bench runner
+        if: ${{ matrix.runs_on == 'ubuntu-latest' }}
+        run: cargo check -p lisp-bench --locked
 
       - name: Cargo clippy
         if: ${{ matrix.runs_on == 'ubuntu-latest' }}

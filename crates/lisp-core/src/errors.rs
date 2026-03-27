@@ -1,28 +1,6 @@
-//! Error types for the Lisp interpreter.
-//!
-//! This module defines two main error enums:
-//! - `LispError`: Top-level errors that can occur during REPL operation
-//! - `LispComputerError`: Runtime errors during evaluation
+//! Error types for the Lisp interpreter core.
 //!
 //! All errors implement `thiserror::Error` for easy error handling and display.
-
-use rustyline::error::ReadlineError;
-
-/// Top-level errors that can occur in the Lisp interpreter.
-///
-/// This enum wraps errors from the REPL, readline library, and runtime evaluation.
-#[derive(thiserror::Error, Debug)]
-pub enum LispError {
-    /// The input could not be parsed as a valid Lisp expression.
-    #[error("Invalid input")]
-    InvalidInput,
-    /// Error from the readline library (I/O, Ctrl-C, Ctrl-D, etc.)
-    #[error("readline error")]
-    ReadlineError(#[from] ReadlineError),
-    /// Runtime error during evaluation (unbound variable, type mismatch, etc.)
-    #[error("computer error: {0}")]
-    ComputerError(#[from] LispComputerError),
-}
 
 /// Runtime errors that occur during Lisp expression evaluation.
 ///

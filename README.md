@@ -712,49 +712,35 @@ assert_eq!(s, "❤ love");
 ## Project Structure
 
 ```
-src/
-├── main.rs           # REPL entry point
-├── lib.rs            # Library root, exports all public modules
-├── parse.rs          # Parser using nom combinators
-├── parse/
-│   └── string.rs     # String parsing with escape sequences
-├── process.rs        # Built-in functions and special forms
-├── value.rs          # Value enum and ProcessorFunc type
-├── value/
-│   └── lambda.rs     # Lambda struct with closure capture
-├── root.rs           # GC arena root (LispRoot, GcArena)
-├── errors.rs         # Error types (LispError, LispComputerError)
-└── test_utils.rs     # Test helper functions
+crates/
+├── lisp-core/
+│   └── src/          # Interpreter core implementation
+├── lisp/
+│   └── src/          # Compatibility lib + REPL binary
+├── lisp-conformance/
+│   ├── src/          # Corpus runner
+│   └── cases/        # File-based language conformance cases
+└── lisp-bench/
+    ├── src/          # Manual benchmark runner
+    └── cases/        # Benchmark inputs for lisp/guile/racket
 ```
 
 ## Public API
 
-Everything you need is in the root module:
+For compatibility, the existing public entrypoint remains:
 
 ```rust
-// Core types
 use lisp::{Expression, Value, Lambda, LispRoot, GcArena};
-
-// Parsing
 use lisp::{parse_expression, parse_string};
-
-// Errors
 use lisp::{LispError, LispComputerError};
 ```
 
-### Modules
-
-- `lisp::parse`: Parser and AST (`Expression`)
-- `lisp::value`: Runtime values (`Value`, `Lambda`, `ProcessorFunc`)
-- `lisp::root`: GC arena (`GcArena`, `LispRoot`, `RootToken`)
-- `lisp::process`: Built-in functions (all `pub` but typically used via `LispRoot::new()`)
-- `lisp::errors`: Error types
-- `lisp::parse_string`: Re-export of string parser
+The actual implementation lives in `lisp_core`, and workspace-internal crates should prefer `lisp_core::...` directly.
 
 ## Running the REPL
 
 ```bash
-cargo run
+cargo run -p lisp
 ```
 
 The REPL supports:
@@ -791,6 +777,18 @@ Run the test suite:
 
 ```bash
 cargo test
+```
+
+Run the conformance suite directly:
+
+```bash
+cargo test -p lisp-conformance
+```
+
+Check the benchmark runner:
+
+```bash
+cargo check -p lisp-bench
 ```
 
 The interpreter has 42+ unit tests covering:
