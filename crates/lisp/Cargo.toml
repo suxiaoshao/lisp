@@ -1,0 +1,11 @@
+[package]
+name = "lisp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lisp-core = { path = "../lisp-core" }
+nom.workspace = true
+rustyline.workspace = true
+thiserror.workspace = true

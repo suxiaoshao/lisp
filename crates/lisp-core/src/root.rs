@@ -56,8 +56,8 @@ impl<'gc> Rootable<'gc> for RootToken {
 ///
 /// # Example
 /// ```
-/// use lisp::GcArena;
-/// let arena = GcArena::new(|mc| lisp::LispRoot::new(mc));
+/// use lisp_core::GcArena;
+/// let arena = GcArena::new(|mc| lisp_core::LispRoot::new(mc));
 /// ```
 pub type GcArena<'gc> = Arena<RootToken>;
 

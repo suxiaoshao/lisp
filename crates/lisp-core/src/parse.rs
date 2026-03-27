@@ -137,9 +137,9 @@ impl<'gc> Expression<'gc> {
 ///
 /// # Example
 /// ```
-/// use lisp::GcArena;
-/// use lisp::parse_expression;
-/// let arena = GcArena::new(|mc| lisp::LispRoot::new(mc));
+/// use lisp_core::GcArena;
+/// use lisp_core::parse_expression;
+/// let arena = GcArena::new(|mc| lisp_core::LispRoot::new(mc));
 /// arena.mutate(|mc, _root| {
 ///     let (remaining, _expr) = parse_expression(mc, "(+ 1 2)").unwrap();
 ///     assert!(remaining.is_empty());
@@ -165,6 +165,30 @@ pub fn parse_expression<'i, 'gc>(
     ))
     .parse(input)?;
     Ok((input, data))
+}
+
+/// Parse zero or more top-level Lisp expressions from a string.
+pub fn parse_program<'i, 'gc>(
+    mc: &'gc Mutation<'gc>,
+    input: &'i str,
+) -> IResult<&'i str, Vec<Gc<'gc, Expression<'gc>>>> {
+    let (mut input, _) = multispace0.parse(input)?;
+    let mut expressions = Vec::new();
+
+    loop {
+        match parse_expression(mc, input) {
+            Ok((next, expression)) => {
+                expressions.push(expression);
+                let (next, _) = multispace0.parse(next)?;
+                input = next;
+            }
+            Err(nom::Err::Error(_)) => break,
+            Err(nom::Err::Incomplete(_)) if input.is_empty() => break,
+            Err(err) => return Err(err),
+        }
+    }
+
+    Ok((input, expressions))
 }
 
 /// Parse contents of a list (inner parser).
@@ -300,6 +324,51 @@ mod test {
         let input = "test";
         let result = parse_lisp_variable(input);
         assert_eq!(result, Ok(("", "test".to_string())));
+        Ok(())
+    }
+
+    #[test]
+    fn parse_program_test() -> Result<()> {
+        let arena = GcArena::new(|mc| crate::LispRoot::new(mc));
+        arena.mutate(|mc, _root| -> Result<(), LispComputerError> {
+            let (remaining, exprs) = parse_program(mc, "1\n(+ 2 3)")
+                .map_err(|_| LispComputerError::InvalidExpression("parse error".to_string()))?;
+            assert_eq!(remaining, "");
+            assert_eq!(exprs.len(), 2);
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn parse_expression_preserves_trailing_newline() -> Result<()> {
+        let arena = GcArena::new(|mc| crate::LispRoot::new(mc));
+        arena.mutate(|mc, _root| -> Result<(), LispComputerError> {
+            let (remaining, _expr) = parse_expression(mc, "((lambda (x y) (+ x y)) 2 3)\n")
+                .map_err(|_| LispComputerError::InvalidExpression("parse error".to_string()))?;
+            assert_eq!(remaining, "\n");
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn parse_program_allows_trailing_newline() -> Result<()> {
+        let arena = GcArena::new(|mc| crate::LispRoot::new(mc));
+        arena.mutate(|mc, _root| -> Result<(), LispComputerError> {
+            let (remaining, _expr) = parse_expression(mc, "((lambda (x y) (+ x y)) 2 3)\n")
+                .map_err(|_| LispComputerError::InvalidExpression("parse error".to_string()))?;
+            assert_eq!(remaining, "\n");
+            let (remaining, _) = multispace0::<_, nom::error::Error<_>>(remaining)
+                .map_err(|_| LispComputerError::InvalidExpression("parse error".to_string()))?;
+            assert_eq!(remaining, "");
+
+            let (remaining, exprs) = parse_program(mc, "((lambda (x y) (+ x y)) 2 3)\n")
+                .map_err(|_| LispComputerError::InvalidExpression("parse error".to_string()))?;
+            assert_eq!(remaining, "");
+            assert_eq!(exprs.len(), 1);
+            Ok(())
+        })?;
         Ok(())
     }
 }

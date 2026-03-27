@@ -41,6 +41,7 @@
 ## 4. GitHub 与协作规则
 
 - 编写 issue、PR、评论前，先检查 `.github/` 下的模板。
+- 运行 `gh` 相关命令时，默认申请沙盒外权限；不要假设 GitHub CLI 能在沙盒内正常访问认证状态、远程仓库或网络。
 - issue 默认使用：
   - `.github/ISSUE_TEMPLATE/bug_report.yml`
   - `.github/ISSUE_TEMPLATE/feature_request.yml`

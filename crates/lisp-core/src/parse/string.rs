@@ -220,7 +220,7 @@ where
 ///
 /// # Example
 /// ```
-/// use lisp::parse_string::parse_string;
+/// use lisp_core::parse_string::parse_string;
 /// # use nom::IResult;
 /// let result = parse_string::<nom::error::Error<&str>>("\"hello\\nworld\"");
 /// assert!(result.is_ok());

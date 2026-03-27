@@ -1,15 +1,20 @@
-[package]
-name = "lisp"
+[workspace]
+resolver = "2"
+members = ["crates/lisp-core", "crates/lisp", "crates/lisp-bench", "crates/lisp-conformance"]
+default-members = ["crates/lisp-core", "crates/lisp", "crates/lisp-conformance"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
 
-[dependencies]
+[workspace.dependencies]
+anyhow = "1.0.102"
+gc-arena = "0.5.3"
+gc-arena-derive = "0.5.3"
 nom = "8.0.0"
-rustyline = "15.0.0"
-thiserror = "2.0.11"
-gc-arena = "0.5"
-gc-arena-derive = "0.5"
-
-[dev-dependencies]
-anyhow = "1.0.95"
+rustyline = "17.0.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0.18"
+toml = "1.1.0"
