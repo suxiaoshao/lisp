@@ -169,6 +169,22 @@ fn collect_cases(root: &Path, dir: &Path, cases: &mut Vec<BenchCase>) -> Result<
 
 fn run_case(case: &BenchCase, target: Target) -> BenchResult {
     let target_name = target.name().to_string();
+    if case.manifest.iterations == 0 {
+        return BenchResult {
+            case: case.id.clone(),
+            target: target_name,
+            status: "error".to_string(),
+            iterations: case.manifest.iterations,
+            warmup_iterations: case.manifest.warmup_iterations,
+            median_ms: None,
+            min_ms: None,
+            max_ms: None,
+            reason: Some(
+                "invalid benchmark manifest: iterations must be greater than 0".to_string(),
+            ),
+        };
+    }
+
     let mut samples = Vec::new();
 
     if let Err(reason) = warmup_case(case, target) {
@@ -275,5 +291,30 @@ impl Target {
             Target::Guile => "guile",
             Target::Racket => "racket",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_iterations_returns_configuration_error() {
+        let case = BenchCase {
+            id: "invalid/zero-iterations".to_string(),
+            dir: PathBuf::from("."),
+            manifest: BenchManifest {
+                iterations: 0,
+                warmup_iterations: 0,
+            },
+        };
+
+        let result = run_case(&case, Target::Lisp);
+        assert_eq!(result.status, "error");
+        assert_eq!(result.median_ms, None);
+        assert_eq!(
+            result.reason.as_deref(),
+            Some("invalid benchmark manifest: iterations must be greater than 0")
+        );
     }
 }

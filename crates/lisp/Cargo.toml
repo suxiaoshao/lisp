@@ -6,5 +6,6 @@ license.workspace = true
 
 [dependencies]
 lisp-core = { path = "../lisp-core" }
+nom.workspace = true
 rustyline.workspace = true
 thiserror.workspace = true
