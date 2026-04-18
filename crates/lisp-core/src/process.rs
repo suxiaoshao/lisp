@@ -693,11 +693,11 @@ pub fn cond_call<'gc>(
     variables: &HashMap<String, Value<'gc>>,
     mc: &'gc Mutation<'gc>,
 ) -> Result<Value<'gc>, LispComputerError> {
-    let Some((last, args)) = args.split_last() else {
+    let Some((last, clauses)) = args.split_last() else {
         return Err(invalid_arguments("cond", args));
     };
 
-    for arg in args {
+    for arg in clauses {
         if let Expression::List(inner_args) = &**arg
             && let [condition, result] = inner_args.as_slice()
         {
