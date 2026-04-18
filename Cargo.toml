@@ -6,6 +6,7 @@ default-members = ["crates/lisp-core", "crates/lisp", "crates/lisp-conformance"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.95"
 license = "MIT"
 
 [workspace.dependencies]

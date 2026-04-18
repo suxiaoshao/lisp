@@ -16,6 +16,155 @@ use std::collections::{HashMap, HashSet};
 use crate::{errors::LispComputerError, parse::Expression, root::LispRoot, value::Value};
 use gc_arena::{Gc, Mutation};
 
+enum AdditionState {
+    Empty,
+    Number(f64),
+    String(String),
+}
+
+fn invalid_arguments<'gc>(operation: &str, args: &[Gc<'gc, Expression<'gc>>]) -> LispComputerError {
+    LispComputerError::InvalidArguments(
+        operation.to_string(),
+        args.iter().map(|e| format!("{}", e)).collect(),
+    )
+}
+
+fn type_mismatch1(operation: &str, value: impl std::fmt::Display) -> LispComputerError {
+    LispComputerError::TypeMismatch1 {
+        operation: operation.to_string(),
+        left_str: value.to_string(),
+    }
+}
+
+fn eval_number<'gc>(
+    operation: &str,
+    expr: &Gc<'gc, Expression<'gc>>,
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<f64, LispComputerError> {
+    match expr.eval(env, variables, mc)? {
+        Value::Number(n) => Ok(n),
+        other => Err(type_mismatch1(operation, other)),
+    }
+}
+
+fn eval_numbers<'gc>(
+    operation: &str,
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+) -> Result<Vec<f64>, LispComputerError> {
+    args.iter()
+        .map(|arg| eval_number(operation, arg, env, variables, mc))
+        .collect()
+}
+
+fn compare_numbers<'gc>(
+    operation: &str,
+    args: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+    arity_error: LispComputerError,
+    ordered: impl Fn(f64, f64) -> bool,
+) -> Result<Value<'gc>, LispComputerError> {
+    if args.len() < 2 {
+        return Err(arity_error);
+    }
+
+    let numbers = eval_numbers(operation, args, env, variables, mc)?;
+    Ok(Value::Boolean(
+        numbers.windows(2).all(|pair| ordered(pair[0], pair[1])),
+    ))
+}
+
+fn parse_param_names<'gc>(
+    params: &[Gc<'gc, Expression<'gc>>],
+) -> Result<Vec<String>, LispComputerError> {
+    params
+        .iter()
+        .map(|param| match &**param {
+            Expression::Variable(name) => Ok(name.clone()),
+            _ => Err(invalid_arguments("lambda-params", params)),
+        })
+        .collect()
+}
+
+fn capture_free_vars<'gc>(
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    body: &[Gc<'gc, Expression<'gc>>],
+    bound: &HashSet<String>,
+) -> Result<HashMap<String, Value<'gc>>, LispComputerError> {
+    let mut free = HashSet::new();
+    for expr in body {
+        crate::value::Lambda::collect_free_vars(expr, bound, &mut free);
+    }
+
+    let mut captured = HashMap::new();
+    for name in &free {
+        if let Some(value) = env.get_variable(name, variables) {
+            captured.insert(name.clone(), value.clone());
+        } else {
+            return Err(LispComputerError::NotFoundVariable(name.clone()));
+        }
+    }
+    Ok(captured)
+}
+
+fn new_lambda<'gc>(
+    params: Vec<String>,
+    body: &[Gc<'gc, Expression<'gc>>],
+    env: &'gc LispRoot<'gc>,
+    variables: &HashMap<String, Value<'gc>>,
+    mc: &'gc Mutation<'gc>,
+    recursive_name: Option<&str>,
+) -> Result<Gc<'gc, crate::value::Lambda<'gc>>, LispComputerError> {
+    let mut bound: HashSet<String> = params.iter().cloned().collect();
+    if let Some(name) = recursive_name {
+        bound.insert(name.to_string());
+    }
+    let captured = capture_free_vars(env, variables, body, &bound)?;
+    Ok(Gc::new(
+        mc,
+        crate::value::Lambda::new(params, body.to_vec(), captured),
+    ))
+}
+
+fn parse_let_binding<'a, 'gc>(
+    binding: &'a Gc<'gc, Expression<'gc>>,
+    bindings: &[Gc<'gc, Expression<'gc>>],
+) -> Result<(&'a str, Gc<'gc, Expression<'gc>>), LispComputerError> {
+    let Expression::List(list) = &**binding else {
+        return Err(invalid_arguments("let-bindings", bindings));
+    };
+    let [var, value] = list.as_slice() else {
+        return Err(invalid_arguments("let-bindings", bindings));
+    };
+    let Expression::Variable(name) = &**var else {
+        return Err(invalid_arguments("let-bindings", bindings));
+    };
+    Ok((name, *value))
+}
+
+fn parse_do_binding<'a, 'gc>(
+    binding: &'a Gc<'gc, Expression<'gc>>,
+    args: &[Gc<'gc, Expression<'gc>>],
+) -> Result<(&'a str, Gc<'gc, Expression<'gc>>, Gc<'gc, Expression<'gc>>), LispComputerError> {
+    let Expression::List(list) = &**binding else {
+        return Err(invalid_arguments("do", args));
+    };
+    let [var, initial, step] = list.as_slice() else {
+        return Err(invalid_arguments("do", args));
+    };
+    let Expression::Variable(name) = &**var else {
+        return Err(invalid_arguments("do", args));
+    };
+    Ok((name, *initial, *step))
+}
+
 /// Addition operator (`+`).
 ///
 /// Adds numbers or concatenates strings. Type-mixed operations are not allowed.
@@ -38,50 +187,43 @@ pub fn addition_call<'gc>(
     variables: &HashMap<String, Value<'gc>>,
     mc: &'gc Mutation<'gc>,
 ) -> Result<Value<'gc>, LispComputerError> {
-    let mut sum = 0.0;
-    let mut result_string = String::new();
-    let mut saw_number = false;
-    let mut saw_string = false;
+    let mut state = AdditionState::Empty;
 
     for arg in args {
         match arg.eval(env, variables, mc)? {
-            Value::Number(n) => {
-                if !saw_string {
-                    saw_number = true;
-                    sum += n;
-                } else {
+            Value::Number(n) => match &mut state {
+                AdditionState::Empty => state = AdditionState::Number(n),
+                AdditionState::Number(sum) => *sum += n,
+                AdditionState::String(result_string) => {
                     return Err(LispComputerError::TypeMismatch2 {
                         operation: "+".to_string(),
                         left_str: result_string.clone(),
                         right_str: n.to_string(),
                     });
                 }
-            }
-            Value::String(s) => {
-                if !saw_number {
-                    saw_string = true;
-                    result_string.push_str(&s);
-                } else {
+            },
+            Value::String(s) => match &mut state {
+                AdditionState::Empty => state = AdditionState::String(s.to_string()),
+                AdditionState::String(result_string) => result_string.push_str(&s),
+                AdditionState::Number(sum) => {
                     return Err(LispComputerError::TypeMismatch2 {
                         operation: "+".to_string(),
                         left_str: sum.to_string(),
                         right_str: s.to_string(),
                     });
                 }
-            }
+            },
             other => {
-                return Err(LispComputerError::TypeMismatch1 {
-                    operation: "+".to_string(),
-                    left_str: format!("{}", other),
-                });
+                return Err(type_mismatch1("+", other));
             }
         }
     }
 
-    if !result_string.is_empty() {
-        Ok(Value::String(Gc::new(mc, result_string)))
-    } else {
-        Ok(Value::Number(sum))
+    match state {
+        AdditionState::Empty => Ok(Value::Number(0.0)),
+        AdditionState::Number(sum) => Ok(Value::Number(sum)),
+        AdditionState::String(s) if s.is_empty() => Ok(Value::Number(0.0)),
+        AdditionState::String(s) => Ok(Value::String(Gc::new(mc, s))),
     }
 }
 
@@ -107,37 +249,22 @@ pub fn subtraction_call<'gc>(
     variables: &HashMap<String, Value<'gc>>,
     mc: &'gc Mutation<'gc>,
 ) -> Result<Value<'gc>, LispComputerError> {
-    if let Some((first, rest)) = args.split_first() {
-        let initial_value = match first.eval(env, variables, mc)? {
-            Value::Number(n) => n,
-            value => {
-                return Err(LispComputerError::TypeMismatch1 {
-                    operation: "-".to_string(),
-                    left_str: format!("{}", value),
-                });
-            }
-        };
-        let value = if rest.is_empty() {
-            -initial_value
-        } else {
-            rest.iter().try_fold(initial_value, |acc, expr| {
-                let value = expr.eval(env, variables, mc)?;
-                match value {
-                    Value::Number(num) => Ok(acc - num),
-                    other => Err(LispComputerError::TypeMismatch1 {
-                        operation: "-".to_string(),
-                        left_str: format!("{}", other),
-                    }),
-                }
-            })?
-        };
-        Ok(Value::Number(value))
-    } else {
-        Err(LispComputerError::TypeMismatch1 {
+    let Some((first, rest)) = args.split_first() else {
+        return Err(LispComputerError::TypeMismatch1 {
             operation: "-".to_string(),
             left_str: "nil".to_string(),
-        })
-    }
+        });
+    };
+
+    let initial_value = eval_number("-", first, env, variables, mc)?;
+    let value = if rest.is_empty() {
+        -initial_value
+    } else {
+        rest.iter().try_fold(initial_value, |acc, expr| {
+            Ok(acc - eval_number("-", expr, env, variables, mc)?)
+        })?
+    };
+    Ok(Value::Number(value))
 }
 
 /// Multiplication operator (`*`).
@@ -162,15 +289,7 @@ pub fn multiplication_call<'gc>(
 ) -> Result<Value<'gc>, LispComputerError> {
     let mut result = 1.0;
     for arg in args {
-        match arg.eval(env, variables, mc)? {
-            Value::Number(num) => result *= num,
-            other => {
-                return Err(LispComputerError::TypeMismatch1 {
-                    operation: "*".to_string(),
-                    left_str: format!("{}", other),
-                });
-            }
-        }
+        result *= eval_number("*", arg, env, variables, mc)?;
     }
     Ok(Value::Number(result))
 }
@@ -201,34 +320,26 @@ pub fn division_call<'gc>(
     variables: &HashMap<String, Value<'gc>>,
     mc: &'gc Mutation<'gc>,
 ) -> Result<Value<'gc>, LispComputerError> {
-    if let Some((first, rest)) = args.split_first() {
-        let initial_value = match first.eval(env, variables, mc)? {
-            Value::Number(n) => n,
-            value => {
-                return Err(LispComputerError::TypeMismatch1 {
-                    operation: "/".to_string(),
-                    left_str: format!("{}", value),
-                });
-            }
-        };
-        let value = rest.iter().try_fold(initial_value, |acc, expr| {
-            let value = expr.eval(env, variables, mc)?;
-            match value {
-                Value::Number(n) => Ok(acc / n),
-                value => Err(LispComputerError::TypeMismatch2 {
-                    operation: "/".to_string(),
-                    left_str: acc.to_string(),
-                    right_str: format!("{}", value),
-                }),
-            }
-        })?;
-        Ok(Value::Number(value))
-    } else {
-        Err(LispComputerError::TypeMismatch1 {
+    let Some((first, rest)) = args.split_first() else {
+        return Err(LispComputerError::TypeMismatch1 {
             operation: "/".to_string(),
             left_str: "nil".to_string(),
-        })
-    }
+        });
+    };
+
+    let initial_value = eval_number("/", first, env, variables, mc)?;
+    let value = rest.iter().try_fold(initial_value, |acc, expr| {
+        let value = expr.eval(env, variables, mc)?;
+        match value {
+            Value::Number(n) => Ok(acc / n),
+            value => Err(LispComputerError::TypeMismatch2 {
+                operation: "/".to_string(),
+                left_str: acc.to_string(),
+                right_str: format!("{}", value),
+            }),
+        }
+    })?;
+    Ok(Value::Number(value))
 }
 
 /// Equality operator (`=`).
@@ -310,34 +421,15 @@ pub fn greater_than_call<'gc>(
     variables: &HashMap<String, Value<'gc>>,
     mc: &'gc Mutation<'gc>,
 ) -> Result<Value<'gc>, LispComputerError> {
-    if args.len() < 2 {
-        return Err(LispComputerError::ArityMismatch(
-            ">".to_string(),
-            2,
-            args.len(),
-        ));
-    }
-
-    let mut evaluated_args = Vec::new();
-    for arg in args {
-        match arg.eval(env, variables, mc)? {
-            Value::Number(n) => evaluated_args.push(n),
-            other => {
-                return Err(LispComputerError::TypeMismatch1 {
-                    operation: ">".to_string(),
-                    left_str: format!("{}", other),
-                });
-            }
-        }
-    }
-
-    for pair in evaluated_args.windows(2) {
-        if pair[0] <= pair[1] {
-            return Ok(Value::Boolean(false));
-        }
-    }
-
-    Ok(Value::Boolean(true))
+    compare_numbers(
+        ">",
+        args,
+        env,
+        variables,
+        mc,
+        LispComputerError::ArityMismatch(">".to_string(), 2, args.len()),
+        |left, right| left > right,
+    )
 }
 
 /// Less-than operator (`<`).
@@ -365,33 +457,15 @@ pub fn less_than_call<'gc>(
     variables: &HashMap<String, Value<'gc>>,
     mc: &'gc Mutation<'gc>,
 ) -> Result<Value<'gc>, LispComputerError> {
-    if args.len() < 2 {
-        return Err(LispComputerError::InvalidArguments(
-            "<".to_string(),
-            args.iter().map(|e| format!("{}", e)).collect(),
-        ));
-    }
-
-    let mut evaluated_args = Vec::new();
-    for arg in args {
-        match arg.eval(env, variables, mc)? {
-            Value::Number(n) => evaluated_args.push(n),
-            other => {
-                return Err(LispComputerError::TypeMismatch1 {
-                    operation: "<".to_string(),
-                    left_str: format!("{}", other),
-                });
-            }
-        }
-    }
-
-    for pair in evaluated_args.windows(2) {
-        if pair[0] >= pair[1] {
-            return Ok(Value::Boolean(false));
-        }
-    }
-
-    Ok(Value::Boolean(true))
+    compare_numbers(
+        "<",
+        args,
+        env,
+        variables,
+        mc,
+        invalid_arguments("<", args),
+        |left, right| left < right,
+    )
 }
 
 /// Greater-than-or-equal operator (`>=`).
@@ -419,31 +493,15 @@ pub fn greater_equal_call<'gc>(
     variables: &HashMap<String, Value<'gc>>,
     mc: &'gc Mutation<'gc>,
 ) -> Result<Value<'gc>, LispComputerError> {
-    if args.len() < 2 {
-        return Err(LispComputerError::InvalidArguments(
-            ">=".to_string(),
-            args.iter().map(|e| format!("{}", e)).collect(),
-        ));
-    }
-    let mut evaluated_args = Vec::new();
-
-    for arg in args {
-        match arg.eval(env, variables, mc)? {
-            Value::Number(n) => evaluated_args.push(n),
-            other => {
-                return Err(LispComputerError::TypeMismatch1 {
-                    operation: ">=".to_string(),
-                    left_str: format!("{}", other),
-                });
-            }
-        }
-    }
-    for pair in evaluated_args.windows(2) {
-        if pair[0] < pair[1] {
-            return Ok(Value::Boolean(false));
-        }
-    }
-    Ok(Value::Boolean(true))
+    compare_numbers(
+        ">=",
+        args,
+        env,
+        variables,
+        mc,
+        invalid_arguments(">=", args),
+        |left, right| left >= right,
+    )
 }
 
 /// Less-than-or-equal operator (`<=`).
@@ -471,30 +529,15 @@ pub fn less_equal_call<'gc>(
     variables: &HashMap<String, Value<'gc>>,
     mc: &'gc Mutation<'gc>,
 ) -> Result<Value<'gc>, LispComputerError> {
-    if args.len() < 2 {
-        return Err(LispComputerError::InvalidArguments(
-            "<=".to_string(),
-            args.iter().map(|e| format!("{}", e)).collect(),
-        ));
-    }
-    let mut evaluated_args = Vec::new();
-    for arg in args {
-        match arg.eval(env, variables, mc)? {
-            Value::Number(n) => evaluated_args.push(n),
-            other => {
-                return Err(LispComputerError::TypeMismatch1 {
-                    operation: "<=".to_string(),
-                    left_str: format!("{}", other),
-                });
-            }
-        }
-    }
-    for pair in evaluated_args.windows(2) {
-        if pair[0] > pair[1] {
-            return Ok(Value::Boolean(false));
-        }
-    }
-    Ok(Value::Boolean(true))
+    compare_numbers(
+        "<=",
+        args,
+        env,
+        variables,
+        mc,
+        invalid_arguments("<=", args),
+        |left, right| left <= right,
+    )
 }
 
 /// Conditional special form (`if`).
@@ -650,29 +693,29 @@ pub fn cond_call<'gc>(
     variables: &HashMap<String, Value<'gc>>,
     mc: &'gc Mutation<'gc>,
 ) -> Result<Value<'gc>, LispComputerError> {
-    if let Some((last, args)) = args.split_last() {
-        for arg in args {
-            if let Expression::List(inner_args) = &**arg
-                && let [condition, result] = inner_args.as_slice()
-            {
-                let condition_value = condition.eval(env, variables, mc)?;
-                if condition_value.boolean() {
-                    return result.eval(env, variables, mc);
-                }
+    let Some((last, args)) = args.split_last() else {
+        return Err(invalid_arguments("cond", args));
+    };
+
+    for arg in args {
+        if let Expression::List(inner_args) = &**arg
+            && let [condition, result] = inner_args.as_slice()
+        {
+            let condition_value = condition.eval(env, variables, mc)?;
+            if condition_value.boolean() {
+                return result.eval(env, variables, mc);
             }
         }
-        if let Expression::List(inner_args) = &**last
-            && let [var_gc, result_gc] = inner_args.as_slice()
-            && let Expression::Variable(name) = &**var_gc
-            && name == "else"
-        {
-            return result_gc.eval(env, variables, mc);
-        }
     }
-    Err(LispComputerError::InvalidArguments(
-        "cond".to_string(),
-        args.iter().map(|e| format!("{}", e)).collect(),
-    ))
+    if let Expression::List(inner_args) = &**last
+        && let [var_gc, result_gc] = inner_args.as_slice()
+        && let Expression::Variable(name) = &**var_gc
+        && name == "else"
+    {
+        return result_gc.eval(env, variables, mc);
+    }
+
+    Err(invalid_arguments("cond", args))
 }
 
 /// Variable definition special form (`define`).
@@ -704,87 +747,35 @@ pub fn define_call<'gc>(
     variables: &HashMap<String, Value<'gc>>,
     mc: &'gc Mutation<'gc>,
 ) -> Result<Value<'gc>, LispComputerError> {
-    match args {
-        [first, second] => {
-            if let Expression::Variable(name) = &**first {
-                // Simple variable definition: (define x value)
-                let value = second.eval(env, variables, mc)?;
-                env.set_variable(name.to_string(), value, mc);
-                Ok(Value::Nil)
-            } else if let Expression::List(params) = &**first {
-                // Function definition: (define (name params...) body...)
-                if let Expression::List(body) = &**second {
-                    match params.as_slice() {
-                        [var, tail @ ..] => {
-                            if let Expression::Variable(name) = &**var {
-                                // Extract parameter names
-                                let params_vec = tail
-                                    .iter()
-                                    .map(|param| match &**param {
-                                        Expression::Variable(name) => Ok(name.clone()),
-                                        _ => Err(LispComputerError::InvalidArguments(
-                                            "lambda-params".to_string(),
-                                            params.iter().map(|e| format!("{}", e)).collect(),
-                                        )),
-                                    })
-                                    .collect::<Result<Vec<String>, LispComputerError>>()?;
-                                // Compute free variables in body (closure capture)
-                                let bound: HashSet<String> = params_vec.iter().cloned().collect();
-                                let mut free = HashSet::new();
-                                for expr in body {
-                                    crate::value::Lambda::collect_free_vars(
-                                        expr, &bound, &mut free,
-                                    );
-                                }
-                                // Capture free variables from environment
-                                let mut captured: HashMap<String, Value<'gc>> = HashMap::new();
-                                for name in &free {
-                                    if let Some(value) = env.get_variable(name, variables) {
-                                        captured.insert(name.clone(), value.clone());
-                                    } else {
-                                        return Err(LispComputerError::NotFoundVariable(
-                                            name.clone(),
-                                        ));
-                                    }
-                                }
-                                let lambda =
-                                    crate::value::Lambda::new(params_vec, body.clone(), captured);
-                                env.set_variable(
-                                    name.to_string(),
-                                    Value::Lambda(Gc::new(mc, lambda)),
-                                    mc,
-                                );
-                                Ok(Value::Nil)
-                            } else {
-                                Err(LispComputerError::InvalidArguments(
-                                    "lambda-params".to_string(),
-                                    params.iter().map(|e| format!("{}", e)).collect(),
-                                ))
-                            }
-                        }
-                        _ => Err(LispComputerError::InvalidArguments(
-                            "define".to_string(),
-                            args.iter().map(|e| format!("{}", e)).collect(),
-                        )),
-                    }
-                } else {
-                    Err(LispComputerError::InvalidArguments(
-                        "define".to_string(),
-                        args.iter().map(|e| format!("{}", e)).collect(),
-                    ))
-                }
-            } else {
-                Err(LispComputerError::InvalidArguments(
-                    "define".to_string(),
-                    args.iter().map(|e| format!("{}", e)).collect(),
-                ))
-            }
-        }
-        _ => Err(LispComputerError::InvalidArguments(
-            "define".to_string(),
-            args.iter().map(|e| format!("{}", e)).collect(),
-        )),
+    let [first, second] = args else {
+        return Err(invalid_arguments("define", args));
+    };
+
+    if let Expression::Variable(name) = &**first {
+        // Simple variable definition: (define x value)
+        let value = second.eval(env, variables, mc)?;
+        env.set_variable(name.to_string(), value, mc);
+        return Ok(Value::Nil);
     }
+
+    let Expression::List(params) = &**first else {
+        return Err(invalid_arguments("define", args));
+    };
+    let Expression::List(body) = &**second else {
+        return Err(invalid_arguments("define", args));
+    };
+    let [var, tail @ ..] = params.as_slice() else {
+        return Err(invalid_arguments("define", args));
+    };
+    let Expression::Variable(name) = &**var else {
+        return Err(invalid_arguments("lambda-params", params));
+    };
+
+    // Function definition: (define (name params...) body...)
+    let params_vec = parse_param_names(tail)?;
+    let lambda = new_lambda(params_vec, body, env, variables, mc, None)?;
+    env.set_variable(name.to_string(), Value::Lambda(lambda), mc);
+    Ok(Value::Nil)
 }
 
 /// Lambda (anonymous function) special form (`lambda`).
@@ -822,55 +813,19 @@ pub fn lambda_call<'gc>(
     mc: &'gc Mutation<'gc>,
 ) -> Result<Value<'gc>, LispComputerError> {
     // args should be: [params_gc, body1, body2, ...]
-    if let [params_gc, rest @ ..] = args {
-        if let Expression::List(params) = &**params_gc {
-            // Extract parameter names
-            let param_names: Vec<String> = params
-                .iter()
-                .map(|param| match &**param {
-                    Expression::Variable(name) => Ok(name.clone()),
-                    _ => Err(LispComputerError::InvalidArguments(
-                        "lambda-params".to_string(),
-                        params.iter().map(|e| format!("{}", e)).collect(),
-                    )),
-                })
-                .collect::<Result<Vec<String>, LispComputerError>>()?;
+    let [params_gc, rest @ ..] = args else {
+        return Err(invalid_arguments("lambda", args));
+    };
+    let Expression::List(params) = &**params_gc else {
+        return Err(invalid_arguments("lambda", args));
+    };
 
-            // Compute free variables in body, excluding lambda's own parameters
-            let bound: std::collections::HashSet<String> = param_names.iter().cloned().collect();
-            let mut free = std::collections::HashSet::new();
-            for expr in rest {
-                crate::value::Lambda::collect_free_vars(expr, &bound, &mut free);
-            }
+    // Extract parameter names
+    let param_names = parse_param_names(params)?;
+    let lambda = new_lambda(param_names, rest, env, variables, mc, None)?;
 
-            // Capture free variables from current environment
-            let mut captured: HashMap<String, Value<'gc>> = HashMap::new();
-            for name in &free {
-                if let Some(value) = env.get_variable(name, variables) {
-                    captured.insert(name.clone(), value.clone());
-                } else {
-                    return Err(LispComputerError::NotFoundVariable(name.clone()));
-                }
-            }
-
-            // Create closure
-            let body_vec = rest.to_vec();
-            Ok(Value::Lambda(Gc::new(
-                mc,
-                crate::value::Lambda::new(param_names, body_vec, captured),
-            )))
-        } else {
-            Err(LispComputerError::InvalidArguments(
-                "lambda".to_string(),
-                args.iter().map(|e| format!("{}", e)).collect(),
-            ))
-        }
-    } else {
-        Err(LispComputerError::InvalidArguments(
-            "lambda".to_string(),
-            args.iter().map(|e| format!("{}", e)).collect(),
-        ))
-    }
+    // Create closure
+    Ok(Value::Lambda(lambda))
 }
 
 /// Local binding special form (`let`).
@@ -913,7 +868,7 @@ pub fn let_call<'gc>(
 ) -> Result<Value<'gc>, LispComputerError> {
     /// Helper: construct a lambda from let bindings and body.
     fn get_lambda_from<'gc>(
-        env: &LispRoot<'gc>,
+        env: &'gc LispRoot<'gc>,
         variables: &HashMap<String, Value<'gc>>,
         mc: &'gc Mutation<'gc>,
         recursive_name: Option<&str>,
@@ -929,108 +884,43 @@ pub fn let_call<'gc>(
         let mut params = Vec::new();
         let mut lambda_args = Vec::new();
         for binding in bindings {
-            match &**binding {
-                Expression::List(list) => match list.as_slice() {
-                    [var, value] => {
-                        if let Expression::Variable(name) = &**var {
-                            params.push(name.to_string());
-                            lambda_args.push(*value);
-                        } else {
-                            return Err(LispComputerError::InvalidArguments(
-                                "let-bindings".to_string(),
-                                bindings.iter().map(|e| format!("{}", e)).collect(),
-                            ));
-                        }
-                    }
-                    _ => {
-                        return Err(LispComputerError::InvalidArguments(
-                            "let-bindings".to_string(),
-                            bindings.iter().map(|e| format!("{}", e)).collect(),
-                        ));
-                    }
-                },
-                _ => {
-                    return Err(LispComputerError::InvalidArguments(
-                        "let-bindings".to_string(),
-                        bindings.iter().map(|e| format!("{}", e)).collect(),
-                    ));
-                }
-            }
+            let (name, value) = parse_let_binding(binding, bindings)?;
+            params.push(name.to_string());
+            lambda_args.push(value);
         }
 
-        // Compute free variables for closure capture
-        let mut bound: HashSet<String> = params.iter().cloned().collect();
-        if let Some(name) = recursive_name {
-            bound.insert(name.to_string());
-        }
-        let mut free = HashSet::new();
-        for expr in body {
-            crate::value::Lambda::collect_free_vars(expr, &bound, &mut free);
-        }
-        let mut captured: HashMap<String, Value<'gc>> = HashMap::new();
-        for name in &free {
-            if let Some(value) = env.get_variable(name, variables) {
-                captured.insert(name.clone(), value.clone());
-            } else {
-                return Err(LispComputerError::NotFoundVariable(name.clone()));
-            }
-        }
-
-        let lambda = Gc::new(
-            mc,
-            crate::value::Lambda::new(params, body.to_vec(), captured),
-        );
+        let lambda = new_lambda(params, body, env, variables, mc, recursive_name)?;
         Ok((lambda, lambda_args))
     }
 
     match args {
         // Named let: (let name ((var val) ...) body...)
-        [name_expr, bindings_gc, rest @ ..] if matches!(&**name_expr, Expression::Variable(_)) => {
+        [name_expr, bindings_gc, rest @ ..]
             if let (Expression::Variable(name), Expression::List(bindings)) =
-                (&**name_expr, &**bindings_gc)
-            {
-                if rest.is_empty() {
-                    return Err(LispComputerError::InvalidArguments(
-                        "let".to_string(),
-                        args.iter().map(|e| format!("{}", e)).collect(),
-                    ));
-                }
-                let (lambda, lambda_args) =
-                    get_lambda_from(env, variables, mc, Some(name), bindings, rest)?;
-                // Bind the lambda to the name in the extended environment for recursion
-                let mut new_vars = variables.clone();
-                new_vars.insert(name.to_string(), Value::Lambda(lambda));
-                crate::value::Lambda::call(&lambda, &lambda_args, env, &new_vars, mc)
-            } else {
-                Err(LispComputerError::InvalidArguments(
-                    "let".to_string(),
-                    args.iter().map(|e| format!("{}", e)).collect(),
-                ))
+                (&**name_expr, &**bindings_gc) =>
+        {
+            if rest.is_empty() {
+                return Err(invalid_arguments("let", args));
             }
+            let (lambda, lambda_args) =
+                get_lambda_from(env, variables, mc, Some(name), bindings, rest)?;
+            // Bind the lambda to the name in the extended environment for recursion
+            let mut new_vars = variables.clone();
+            new_vars.insert(name.to_string(), Value::Lambda(lambda));
+            crate::value::Lambda::call(&lambda, &lambda_args, env, &new_vars, mc)
         }
         // Simple let: (let ((var val) ...) body...)
         [bindings_gc, rest @ ..] => {
-            if let Expression::List(bindings) = &**bindings_gc {
-                if rest.is_empty() {
-                    return Err(LispComputerError::InvalidArguments(
-                        "let".to_string(),
-                        args.iter().map(|e| format!("{}", e)).collect(),
-                    ));
-                }
-                let (lambda, lambda_args) =
-                    get_lambda_from(env, variables, mc, None, bindings, rest)?;
-                crate::value::Lambda::call(&lambda, &lambda_args, env, variables, mc)
-            } else {
-                Err(LispComputerError::InvalidArguments(
-                    "let".to_string(),
-                    args.iter().map(|e| format!("{}", e)).collect(),
-                ))
+            let Expression::List(bindings) = &**bindings_gc else {
+                return Err(invalid_arguments("let", args));
+            };
+            if rest.is_empty() {
+                return Err(invalid_arguments("let", args));
             }
+            let (lambda, lambda_args) = get_lambda_from(env, variables, mc, None, bindings, rest)?;
+            crate::value::Lambda::call(&lambda, &lambda_args, env, variables, mc)
         }
-        _ => Err(LispComputerError::InvalidArguments(
-            "let".to_string(),
-            args.iter().map(|e| format!("{}", e)).collect(),
-        )),
+        _ => Err(invalid_arguments("let", args)),
     }
 }
 
@@ -1080,80 +970,40 @@ pub fn do_call<'gc>(
     variables: &HashMap<String, Value<'gc>>,
     mc: &'gc Mutation<'gc>,
 ) -> Result<Value<'gc>, LispComputerError> {
-    match args {
-        [bindings_gc, test_gc, bodys @ ..] => {
-            if let (Expression::List(bindings), Expression::List(test)) =
-                (&**bindings_gc, &**test_gc)
-            {
-                let mut new_variables = variables.clone();
-                let mut steps = Vec::new();
-                // Process each binding: evaluate init, store step expression
-                for binding in bindings {
-                    match &**binding {
-                        Expression::List(list) => match list.as_slice() {
-                            [var_gc, value_gc, step_expr_gc] => {
-                                if let Expression::Variable(name) = &**var_gc {
-                                    let evaluated = value_gc.eval(env, variables, mc)?;
-                                    new_variables.insert(name.clone(), evaluated);
-                                    steps.push((name.clone(), *step_expr_gc));
-                                } else {
-                                    return Err(LispComputerError::InvalidArguments(
-                                        "do".to_string(),
-                                        args.iter().map(|e| format!("{}", e)).collect(),
-                                    ));
-                                }
-                            }
-                            _ => {
-                                return Err(LispComputerError::InvalidArguments(
-                                    "do".to_string(),
-                                    args.iter().map(|e| format!("{}", e)).collect(),
-                                ));
-                            }
-                        },
-                        _ => {
-                            return Err(LispComputerError::InvalidArguments(
-                                "do".to_string(),
-                                args.iter().map(|e| format!("{}", e)).collect(),
-                            ));
-                        }
-                    }
-                }
-                // Extract test and result expressions
-                let (test_expr, result_expr) = match test.as_slice() {
-                    [test, result] => (*test, *result),
-                    _ => {
-                        return Err(LispComputerError::InvalidArguments(
-                            "do".to_string(),
-                            args.iter().map(|e| format!("{}", e)).collect(),
-                        ));
-                    }
-                };
-                // Main loop
-                loop {
-                    if test_expr.eval(env, &new_variables, mc)?.boolean() {
-                        return result_expr.eval(env, &new_variables, mc);
-                    }
-                    // Evaluate body expressions
-                    for body in bodys {
-                        body.eval(env, &new_variables, mc)?;
-                    }
-                    // Update loop variables with step expressions
-                    for (name, step_expr) in &steps {
-                        let new_value = step_expr.eval(env, &new_variables, mc)?;
-                        new_variables.insert(name.clone(), new_value);
-                    }
-                }
-            } else {
-                Err(LispComputerError::InvalidArguments(
-                    "do".to_string(),
-                    args.iter().map(|e| format!("{}", e)).collect(),
-                ))
-            }
+    let [bindings_gc, test_gc, bodys @ ..] = args else {
+        return Err(invalid_arguments("do", args));
+    };
+    let (Expression::List(bindings), Expression::List(test)) = (&**bindings_gc, &**test_gc) else {
+        return Err(invalid_arguments("do", args));
+    };
+
+    let mut new_variables = variables.clone();
+    let mut steps = Vec::new();
+    // Process each binding: evaluate init, store step expression
+    for binding in bindings {
+        let (name, value_gc, step_expr_gc) = parse_do_binding(binding, args)?;
+        let evaluated = value_gc.eval(env, variables, mc)?;
+        new_variables.insert(name.to_string(), evaluated);
+        steps.push((name.to_string(), step_expr_gc));
+    }
+    // Extract test and result expressions
+    let [test_expr, result_expr] = test.as_slice() else {
+        return Err(invalid_arguments("do", args));
+    };
+    // Main loop
+    loop {
+        if test_expr.eval(env, &new_variables, mc)?.boolean() {
+            return result_expr.eval(env, &new_variables, mc);
         }
-        _ => Err(LispComputerError::InvalidArguments(
-            "do".to_string(),
-            args.iter().map(|e| format!("{}", e)).collect(),
-        )),
+        // Evaluate body expressions
+        for body in bodys {
+            body.eval(env, &new_variables, mc)?;
+        }
+        // Update loop variables with step expressions
+        for (name, step_expr) in &steps {
+            let new_value = step_expr.eval(env, &new_variables, mc)?;
+            new_variables.insert(name.clone(), new_value);
+        }
     }
 }
 
