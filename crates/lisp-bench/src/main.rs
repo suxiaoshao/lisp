@@ -38,6 +38,36 @@ struct BenchResult {
     reason: Option<String>,
 }
 
+impl BenchResult {
+    fn failure(case: &BenchCase, target: String, status: &str, reason: String) -> Self {
+        BenchResult {
+            case: case.id.clone(),
+            target,
+            status: status.to_string(),
+            iterations: case.manifest.iterations,
+            warmup_iterations: case.manifest.warmup_iterations,
+            median_ms: None,
+            min_ms: None,
+            max_ms: None,
+            reason: Some(reason),
+        }
+    }
+
+    fn success(case: &BenchCase, target: String, median: f64, min: f64, max: f64) -> Self {
+        BenchResult {
+            case: case.id.clone(),
+            target,
+            status: "ok".to_string(),
+            iterations: case.manifest.iterations,
+            warmup_iterations: case.manifest.warmup_iterations,
+            median_ms: Some(median),
+            min_ms: Some(min),
+            max_ms: Some(max),
+            reason: None,
+        }
+    }
+}
+
 fn main() -> Result<(), String> {
     let args: Vec<String> = env::args().skip(1).collect();
     let json_only = args.iter().any(|arg| arg == "--json");
@@ -60,13 +90,18 @@ fn main() -> Result<(), String> {
         }
     }
 
+    print_results(&results, json_only)?;
+    Ok(())
+}
+
+fn print_results(results: &[BenchResult], json_only: bool) -> Result<(), String> {
     if json_only {
         println!(
             "{}",
             serde_json::to_string_pretty(&results).map_err(|err| err.to_string())?
         );
     } else {
-        for result in &results {
+        for result in results {
             match result.status.as_str() {
                 "ok" => println!(
                     "{} [{}] median={:.3}ms min={:.3}ms max={:.3}ms",
@@ -90,45 +125,55 @@ fn main() -> Result<(), String> {
             }
         }
     }
-
     Ok(())
 }
 
 fn parse_targets(args: &[String]) -> Result<Vec<Target>, String> {
+    let values = parse_option_value(args, "--target", Some("--target requires a value"), true)?;
+    let raw = values.unwrap_or_else(|| "lisp,guile,racket".to_string());
+    raw.split(',')
+        .filter(|part| !part.trim().is_empty())
+        .map(parse_target)
+        .collect()
+}
+
+fn parse_option_value(
+    args: &[String],
+    flag: &str,
+    missing_error: Option<&str>,
+    use_last: bool,
+) -> Result<Option<String>, String> {
     let mut values = None;
     let mut index = 0;
     while index < args.len() {
-        if args[index] == "--target" {
-            let value = args
-                .get(index + 1)
-                .ok_or_else(|| "--target requires a value".to_string())?;
+        if args[index] == flag {
+            let Some(value) = args.get(index + 1) else {
+                return missing_error.map_or(Ok(None), |message| Err(message.to_string()));
+            };
+            if !use_last {
+                return Ok(Some(value.clone()));
+            }
             values = Some(value.clone());
             index += 1;
         }
         index += 1;
     }
+    Ok(values)
+}
 
-    let raw = values.unwrap_or_else(|| "lisp,guile,racket".to_string());
-    raw.split(',')
-        .filter(|part| !part.trim().is_empty())
-        .map(|part| match part.trim() {
-            "lisp" => Ok(Target::Lisp),
-            "guile" => Ok(Target::Guile),
-            "racket" => Ok(Target::Racket),
-            other => Err(format!("unknown target `{other}`")),
-        })
-        .collect()
+fn parse_target(value: &str) -> Result<Target, String> {
+    match value.trim() {
+        "lisp" => Ok(Target::Lisp),
+        "guile" => Ok(Target::Guile),
+        "racket" => Ok(Target::Racket),
+        other => Err(format!("unknown target `{other}`")),
+    }
 }
 
 fn parse_case_filter(args: &[String]) -> Option<String> {
-    let mut index = 0;
-    while index < args.len() {
-        if args[index] == "--case" {
-            return args.get(index + 1).cloned();
-        }
-        index += 1;
-    }
-    None
+    parse_option_value(args, "--case", None, false)
+        .ok()
+        .flatten()
 }
 
 fn load_cases(root: &Path) -> Result<Vec<BenchCase>, String> {
@@ -142,79 +187,59 @@ fn collect_cases(root: &Path, dir: &Path, cases: &mut Vec<BenchCase>) -> Result<
     for entry in fs::read_dir(dir).map_err(|err| err.to_string())? {
         let entry = entry.map_err(|err| err.to_string())?;
         let path = entry.path();
-        if path.is_dir() {
-            let manifest_path = path.join("manifest.toml");
-            if manifest_path.exists() {
-                let manifest_str =
-                    fs::read_to_string(&manifest_path).map_err(|err| err.to_string())?;
-                let manifest: BenchManifest =
-                    toml::from_str(&manifest_str).map_err(|err| err.to_string())?;
-                let id = path
-                    .strip_prefix(root)
-                    .map_err(|err| err.to_string())?
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                cases.push(BenchCase {
-                    id,
-                    dir: path,
-                    manifest,
-                });
-            } else {
-                collect_cases(root, &path, cases)?;
-            }
+        if !path.is_dir() {
+            continue;
+        }
+        if let Some(case) = read_case(root, &path)? {
+            cases.push(case);
+        } else {
+            collect_cases(root, &path, cases)?;
         }
     }
     Ok(())
 }
 
+fn read_case(root: &Path, path: &Path) -> Result<Option<BenchCase>, String> {
+    let manifest_path = path.join("manifest.toml");
+    if !manifest_path.exists() {
+        return Ok(None);
+    }
+
+    let manifest_str = fs::read_to_string(&manifest_path).map_err(|err| err.to_string())?;
+    let manifest = toml::from_str(&manifest_str).map_err(|err| err.to_string())?;
+    let id = path
+        .strip_prefix(root)
+        .map_err(|err| err.to_string())?
+        .to_string_lossy()
+        .replace('\\', "/");
+    Ok(Some(BenchCase {
+        id,
+        dir: path.to_path_buf(),
+        manifest,
+    }))
+}
+
 fn run_case(case: &BenchCase, target: Target) -> BenchResult {
     let target_name = target.name().to_string();
     if case.manifest.iterations == 0 {
-        return BenchResult {
-            case: case.id.clone(),
-            target: target_name,
-            status: "error".to_string(),
-            iterations: case.manifest.iterations,
-            warmup_iterations: case.manifest.warmup_iterations,
-            median_ms: None,
-            min_ms: None,
-            max_ms: None,
-            reason: Some(
-                "invalid benchmark manifest: iterations must be greater than 0".to_string(),
-            ),
-        };
+        return BenchResult::failure(
+            case,
+            target_name,
+            "error",
+            "invalid benchmark manifest: iterations must be greater than 0".to_string(),
+        );
     }
 
     let mut samples = Vec::new();
 
     if let Err(reason) = warmup_case(case, target) {
-        return BenchResult {
-            case: case.id.clone(),
-            target: target_name,
-            status: "skip".to_string(),
-            iterations: case.manifest.iterations,
-            warmup_iterations: case.manifest.warmup_iterations,
-            median_ms: None,
-            min_ms: None,
-            max_ms: None,
-            reason: Some(reason),
-        };
+        return BenchResult::failure(case, target_name, "skip", reason);
     }
 
     for _ in 0..case.manifest.iterations {
         let started = Instant::now();
         if let Err(reason) = execute_case(case, target) {
-            return BenchResult {
-                case: case.id.clone(),
-                target: target_name,
-                status: "error".to_string(),
-                iterations: case.manifest.iterations,
-                warmup_iterations: case.manifest.warmup_iterations,
-                median_ms: None,
-                min_ms: None,
-                max_ms: None,
-                reason: Some(reason),
-            };
+            return BenchResult::failure(case, target_name, "error", reason);
         }
         samples.push(started.elapsed().as_secs_f64() * 1000.0);
     }
@@ -224,17 +249,7 @@ fn run_case(case: &BenchCase, target: Target) -> BenchResult {
     let min = samples[0];
     let max = samples[samples.len() - 1];
 
-    BenchResult {
-        case: case.id.clone(),
-        target: target_name,
-        status: "ok".to_string(),
-        iterations: case.manifest.iterations,
-        warmup_iterations: case.manifest.warmup_iterations,
-        median_ms: Some(median),
-        min_ms: Some(min),
-        max_ms: Some(max),
-        reason: None,
-    }
+    BenchResult::success(case, target_name, median, min, max)
 }
 
 fn warmup_case(case: &BenchCase, target: Target) -> Result<(), String> {

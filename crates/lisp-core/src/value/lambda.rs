@@ -177,126 +177,113 @@ impl<'gc> Lambda<'gc> {
                     free.insert(name.clone());
                 }
             }
-            Expression::List(exprs) => {
-                if let Some((first, rest)) = exprs.split_first() {
-                    match &**first {
-                        Expression::Variable(var_name) => {
-                            match var_name.as_str() {
-                                "lambda" => {
-                                    // (lambda (params) body...)
-                                    if let Some(params_gc) = rest.first() {
-                                        if let Expression::List(params) = &**params_gc {
-                                            let param_names: HashSet<String> = params
-                                                .iter()
-                                                .filter_map(|p| match &**p {
-                                                    Expression::Variable(var) => Some(var.clone()),
-                                                    _ => None,
-                                                })
-                                                .collect();
-                                            let mut new_bound = bound.clone();
-                                            new_bound.extend(param_names);
-                                            // Process body expressions (rest[1..])
-                                            for body_expr in rest.iter().skip(1) {
-                                                Self::collect_free_vars(
-                                                    body_expr, &new_bound, free,
-                                                );
-                                            }
-                                        } else {
-                                            // malformed lambda, process normally
-                                            for e in rest {
-                                                Self::collect_free_vars(e, bound, free);
-                                            }
-                                        }
-                                    } else {
-                                        // no params, nothing
-                                    }
-                                }
-                                "let" => {
-                                    let (recursive_name, bindings, body) = match rest {
-                                        [name_gc, bindings_gc, body @ ..]
-                                            if matches!(&**name_gc, Expression::Variable(_))
-                                                && matches!(
-                                                    &**bindings_gc,
-                                                    Expression::List(_)
-                                                ) =>
-                                        {
-                                            if let (
-                                                Expression::Variable(name),
-                                                Expression::List(bindings),
-                                            ) = (&**name_gc, &**bindings_gc)
-                                            {
-                                                (Some(name), bindings, body)
-                                            } else {
-                                                unreachable!()
-                                            }
-                                        }
-                                        [bindings_gc, body @ ..]
-                                            if matches!(&**bindings_gc, Expression::List(_)) =>
-                                        {
-                                            if let Expression::List(bindings) = &**bindings_gc {
-                                                (None, bindings, body)
-                                            } else {
-                                                unreachable!()
-                                            }
-                                        }
-                                        _ => {
-                                            for e in rest {
-                                                Self::collect_free_vars(e, bound, free);
-                                            }
-                                            return;
-                                        }
-                                    };
+            Expression::List(exprs) => Self::collect_list_free_vars(exprs, bound, free),
+        }
+    }
 
-                                    let mut new_bound = bound.clone();
-                                    if let Some(name) = recursive_name {
-                                        new_bound.insert(name.clone());
-                                    }
+    fn collect_list_free_vars(
+        exprs: &[Gc<'gc, Expression<'gc>>],
+        bound: &HashSet<String>,
+        free: &mut HashSet<String>,
+    ) {
+        let [first, rest @ ..] = exprs else {
+            return;
+        };
 
-                                    for binding in bindings {
-                                        if let Expression::List(binding_list) = &**binding {
-                                            match binding_list.as_slice() {
-                                                [var_expr, value_expr] => {
-                                                    Self::collect_free_vars(
-                                                        value_expr, bound, free,
-                                                    );
-                                                    if let Expression::Variable(var_name) =
-                                                        &**var_expr
-                                                    {
-                                                        new_bound.insert(var_name.clone());
-                                                    }
-                                                }
-                                                _ => {
-                                                    for e in binding_list {
-                                                        Self::collect_free_vars(e, bound, free);
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            Self::collect_free_vars(binding, bound, free);
-                                        }
-                                    }
+        match &**first {
+            Expression::Variable(var_name) => match var_name.as_str() {
+                "lambda" => Self::collect_lambda_free_vars(rest, bound, free),
+                "let" => Self::collect_let_free_vars(rest, bound, free),
+                _ => Self::collect_all_free_vars(exprs, bound, free),
+            },
+            _ => Self::collect_all_free_vars(exprs, bound, free),
+        }
+    }
 
-                                    for body_expr in body {
-                                        Self::collect_free_vars(body_expr, &new_bound, free);
-                                    }
-                                }
-                                _ => {
-                                    // Not a binding special form, process all subexpressions normally
-                                    for e in exprs {
-                                        Self::collect_free_vars(e, bound, free);
-                                    }
-                                }
-                            }
-                        }
-                        _ => {
-                            // First element not a variable, process all subexpressions normally
-                            for e in exprs {
-                                Self::collect_free_vars(e, bound, free);
-                            }
-                        }
-                    }
+    fn collect_lambda_free_vars(
+        rest: &[Gc<'gc, Expression<'gc>>],
+        bound: &HashSet<String>,
+        free: &mut HashSet<String>,
+    ) {
+        match rest {
+            [params_gc, body @ ..] if let Expression::List(params) = &**params_gc => {
+                let param_names: HashSet<String> = params
+                    .iter()
+                    .filter_map(|p| match &**p {
+                        Expression::Variable(var) => Some(var.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                let mut new_bound = bound.clone();
+                new_bound.extend(param_names);
+                Self::collect_all_free_vars(body, &new_bound, free);
+            }
+            [_, ..] => Self::collect_all_free_vars(rest, bound, free),
+            [] => {}
+        }
+    }
+
+    fn collect_let_free_vars(
+        rest: &[Gc<'gc, Expression<'gc>>],
+        bound: &HashSet<String>,
+        free: &mut HashSet<String>,
+    ) {
+        let (recursive_name, bindings, body) = match rest {
+            [name_gc, bindings_gc, body @ ..]
+                if let (Expression::Variable(name), Expression::List(bindings)) =
+                    (&**name_gc, &**bindings_gc) =>
+            {
+                (Some(name), bindings, body)
+            }
+            [bindings_gc, body @ ..] if let Expression::List(bindings) = &**bindings_gc => {
+                (None, bindings, body)
+            }
+            _ => {
+                Self::collect_all_free_vars(rest, bound, free);
+                return;
+            }
+        };
+
+        let mut new_bound = bound.clone();
+        if let Some(name) = recursive_name {
+            new_bound.insert(name.clone());
+        }
+
+        for binding in bindings {
+            Self::collect_let_binding_free_vars(binding, bound, free, &mut new_bound);
+        }
+        Self::collect_all_free_vars(body, &new_bound, free);
+    }
+
+    fn collect_let_binding_free_vars(
+        binding: &Gc<'gc, Expression<'gc>>,
+        bound: &HashSet<String>,
+        free: &mut HashSet<String>,
+        new_bound: &mut HashSet<String>,
+    ) {
+        let Expression::List(binding_list) = &**binding else {
+            Self::collect_free_vars(binding, bound, free);
+            return;
+        };
+
+        match binding_list.as_slice() {
+            [var_expr, value_expr] => {
+                Self::collect_free_vars(value_expr, bound, free);
+                if let Expression::Variable(var_name) = &**var_expr {
+                    new_bound.insert(var_name.clone());
                 }
             }
+            _ => Self::collect_all_free_vars(binding_list, bound, free),
+        }
+    }
+
+    fn collect_all_free_vars(
+        exprs: &[Gc<'gc, Expression<'gc>>],
+        bound: &HashSet<String>,
+        free: &mut HashSet<String>,
+    ) {
+        for expr in exprs {
+            Self::collect_free_vars(expr, bound, free);
         }
     }
 }

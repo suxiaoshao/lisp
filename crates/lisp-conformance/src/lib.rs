@@ -43,46 +43,58 @@ pub fn load_cases(root: &Path) -> Result<Vec<TestCase>, String> {
 
 pub fn run_case(case: &TestCase) -> Result<(), String> {
     match (&case.manifest.mode, &case.manifest.expect) {
-        (Mode::Parse, Expect::ParseOk) => parse_full_program(&case.program)
-            .map_err(|err| format!("expected parse success, got error: {err}")),
-        (Mode::Parse, Expect::ParseError) => {
-            if parse_full_program(&case.program).is_err() {
-                Ok(())
-            } else {
-                Err("expected parse failure, but parse succeeded".to_string())
-            }
-        }
-        (Mode::Eval, Expect::Value) => match eval_program(&case.program) {
-            Ok(result) => {
-                let expected =
-                    case.manifest.result.as_deref().ok_or_else(|| {
-                        "missing `result` field for value expectation".to_string()
-                    })?;
-                if result == expected {
-                    Ok(())
-                } else {
-                    Err(format!("expected value `{expected}`, got `{result}`"))
-                }
-            }
-            Err(err) => Err(format!("expected value, got runtime error: {err}")),
-        },
-        (Mode::Eval, Expect::RuntimeError) => match eval_program(&case.program) {
-            Ok(result) => Err(format!("expected runtime error, got value `{result}`")),
-            Err(err) => {
-                let rendered = err.to_string();
-                let needle = case.manifest.error_contains.as_deref().ok_or_else(|| {
-                    "missing `error_contains` field for runtime_error expectation".to_string()
-                })?;
-                if rendered.contains(needle) {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "expected runtime error containing `{needle}`, got `{rendered}`"
-                    ))
-                }
-            }
-        },
+        (Mode::Parse, Expect::ParseOk) => run_parse_ok_case(&case.program),
+        (Mode::Parse, Expect::ParseError) => run_parse_error_case(&case.program),
+        (Mode::Eval, Expect::Value) => run_value_case(case),
+        (Mode::Eval, Expect::RuntimeError) => run_runtime_error_case(case),
         (mode, expect) => Err(format!("unsupported combination: {mode:?} + {expect:?}")),
+    }
+}
+
+fn run_parse_ok_case(program: &str) -> Result<(), String> {
+    parse_full_program(program).map_err(|err| format!("expected parse success, got error: {err}"))
+}
+
+fn run_parse_error_case(program: &str) -> Result<(), String> {
+    if parse_full_program(program).is_err() {
+        Ok(())
+    } else {
+        Err("expected parse failure, but parse succeeded".to_string())
+    }
+}
+
+fn run_value_case(case: &TestCase) -> Result<(), String> {
+    let result = eval_program(&case.program)
+        .map_err(|err| format!("expected value, got runtime error: {err}"))?;
+    let expected = case
+        .manifest
+        .result
+        .as_deref()
+        .ok_or_else(|| "missing `result` field for value expectation".to_string())?;
+
+    if result == expected {
+        Ok(())
+    } else {
+        Err(format!("expected value `{expected}`, got `{result}`"))
+    }
+}
+
+fn run_runtime_error_case(case: &TestCase) -> Result<(), String> {
+    let err = match eval_program(&case.program) {
+        Ok(result) => return Err(format!("expected runtime error, got value `{result}`")),
+        Err(err) => err,
+    };
+    let rendered = err.to_string();
+    let needle = case.manifest.error_contains.as_deref().ok_or_else(|| {
+        "missing `error_contains` field for runtime_error expectation".to_string()
+    })?;
+
+    if rendered.contains(needle) {
+        Ok(())
+    } else {
+        Err(format!(
+            "expected runtime error containing `{needle}`, got `{rendered}`"
+        ))
     }
 }
 
@@ -90,31 +102,38 @@ fn collect_cases(root: &Path, dir: &Path, cases: &mut Vec<TestCase>) -> Result<(
     for entry in fs::read_dir(dir).map_err(|err| err.to_string())? {
         let entry = entry.map_err(|err| err.to_string())?;
         let path = entry.path();
-        if path.is_dir() {
-            let manifest_path = path.join("case.toml");
-            let program_path = path.join("program.lisp");
-            if manifest_path.exists() && program_path.exists() {
-                let manifest_str =
-                    fs::read_to_string(&manifest_path).map_err(|err| err.to_string())?;
-                let manifest: CaseManifest =
-                    toml::from_str(&manifest_str).map_err(|err| err.to_string())?;
-                let program = fs::read_to_string(&program_path).map_err(|err| err.to_string())?;
-                let relative = path
-                    .strip_prefix(root)
-                    .map_err(|err| err.to_string())?
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                cases.push(TestCase {
-                    id: relative,
-                    manifest,
-                    program,
-                });
-            } else {
-                collect_cases(root, &path, cases)?;
-            }
+        if !path.is_dir() {
+            continue;
+        }
+        if let Some(case) = read_case(root, &path)? {
+            cases.push(case);
+        } else {
+            collect_cases(root, &path, cases)?;
         }
     }
     Ok(())
+}
+
+fn read_case(root: &Path, path: &Path) -> Result<Option<TestCase>, String> {
+    let manifest_path = path.join("case.toml");
+    let program_path = path.join("program.lisp");
+    if !(manifest_path.exists() && program_path.exists()) {
+        return Ok(None);
+    }
+
+    let manifest_str = fs::read_to_string(&manifest_path).map_err(|err| err.to_string())?;
+    let manifest = toml::from_str(&manifest_str).map_err(|err| err.to_string())?;
+    let program = fs::read_to_string(&program_path).map_err(|err| err.to_string())?;
+    let id = path
+        .strip_prefix(root)
+        .map_err(|err| err.to_string())?
+        .to_string_lossy()
+        .replace('\\', "/");
+    Ok(Some(TestCase {
+        id,
+        manifest,
+        program,
+    }))
 }
 
 fn parse_full_program(input: &str) -> Result<(), LispComputerError> {
