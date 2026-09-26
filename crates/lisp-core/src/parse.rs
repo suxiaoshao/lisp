@@ -71,7 +71,7 @@ impl<'gc> Display for Expression<'gc> {
                     .collect::<Vec<String>>()
                     .join(" ")
             ),
-            Expression::String(s) => write!(f, "\"{}\"", &**s),
+            Expression::String(s) => write!(f, "\"{}\"", **s),
         }
     }
 }

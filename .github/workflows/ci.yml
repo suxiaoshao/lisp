@@ -23,34 +23,57 @@ jobs:
         include:
           - name: Ubuntu
             runs_on: ubuntu-latest
+            command: nix develop --command
           - name: macOS
             runs_on: macos-latest
+            command: nix develop --command
           - name: Windows
             runs_on: windows-latest
+            command: ""
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      - name: Install Nix
+        if: ${{ runner.os != 'Windows' }}
+        uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
+
+      - name: Install pinned Rust on Windows
+        if: ${{ runner.os == 'Windows' }}
+        run: rustup toolchain install --no-self-update
+
+      - name: Prepare Nix toolchain for the Cargo cache
+        if: ${{ runner.os != 'Windows' }}
+        run: nix develop --command bash -c 'dirname "$(command -v rustc)" >> "$GITHUB_PATH"'
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ runner.os }}-${{ hashFiles('flake.lock', 'rust-toolchain.toml') }}
 
       - name: Cargo fmt
         if: ${{ matrix.runs_on == 'ubuntu-latest' }}
-        run: cargo fmt --check --all
+        run: ${{ matrix.command }} cargo fmt --check --all
 
       - name: Cargo test
-        run: cargo test --locked
+        run: ${{ matrix.command }} cargo test --locked
 
       - name: Cargo check bench runner
         if: ${{ matrix.runs_on == 'ubuntu-latest' }}
-        run: cargo check -p lisp-bench --locked
+        run: ${{ matrix.command }} cargo check -p lisp-bench --locked
 
       - name: Cargo clippy
         if: ${{ matrix.runs_on == 'ubuntu-latest' }}
-        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+        run: ${{ matrix.command }} cargo clippy --all-targets --all-features --locked -- -D warnings
+
+  ci:
+    name: CI
+    needs: test
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all platform checks
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+        run: test "$TEST_RESULT" = success
