@@ -812,8 +812,9 @@ The interpreter has 42+ unit tests covering:
 
 ## Requirements
 
-- Rust 2024 edition
-- Stable toolchain (1.80+ recommended)
+- Rust 2024 edition; MSRV is defined by `Cargo.toml`, and the development toolchain by `rust-toolchain.toml`.
+- On macOS / Linux, `nix develop` supplies the pinned compiler and linker. Use `nix develop --command fish --no-config` for Fish.
+- CI uses the same Nix environment on macOS / Linux. Native Windows uses Rustup / MSVC and the same toolchain file.
 
 ## Building
 
